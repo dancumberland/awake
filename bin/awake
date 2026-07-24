@@ -19,8 +19,8 @@
 # screen off — it WILL drain the battery. Plug in for long sessions.
 #
 # Also: macOS turns off the built-in mic and camera while the lid is closed.
-# They come back when you open it. If the mic is still missing, run
-# `sudo killall coreaudiod` (it relaunches itself) between calls.
+# They come back when you open it. If the mic doesn't, `awake off` and
+# `awake status` notice and print the one command that brings it back.
 
 set -euo pipefail
 
@@ -30,6 +30,7 @@ STATE="${AWAKE_STATE_DIR:-$HOME/.cache/awake}"
 PIDFILE="$STATE/pid"
 UNTILFILE="$STATE/until"
 LIDFILE="$STATE/lid"
+MICFILE="$STATE/mic"
 
 die() {
   echo "awake: $*" >&2
@@ -63,10 +64,9 @@ terminal; does NOT survive a reboot.
 Heads up: with the lid closed on battery, the Mac runs full-power with the
 screen off — it WILL drain the battery. Plug in for long sessions.
 
-macOS also turns off the built-in mic and camera while the lid is closed.
-They come back when you open it. If the mic is still missing, run
-  sudo killall coreaudiod
-between calls — it relaunches itself and the mic reappears.
+macOS also turns off the built-in mic and camera while the lid is closed. They
+come back when you open it. If the mic doesn't come back, `awake off` and
+`awake status` notice and print the one command that restores it.
 EOF
 }
 
@@ -94,6 +94,52 @@ sleep_disabled_now() {
   local v
   v=$(pmset -g 2>/dev/null | awk '/SleepDisabled/ {print $2; exit}') || true
   [[ "$v" == "1" ]]
+}
+
+# Is the lid shut right now? macOS turns the built-in mic and camera off while
+# it is, so this tells the mic check whether a missing mic is expected.
+lid_closed() {
+  ioreg -r -k AppleClamshellState -d 4 2>/dev/null |
+    awk -F'= ' '/"AppleClamshellState"/ {print $2; exit}' |
+    grep -qi 'yes'
+}
+
+# Does a built-in microphone exist right now? True when some audio device
+# reports both a built-in transport and at least one input channel. Runs in
+# about half a second; only called at session boundaries, never in a loop.
+builtin_mic_present() {
+  system_profiler -json SPAudioDataType 2>/dev/null | awk '
+    /\{/ { builtin = 0; input = 0 }
+    /"coreaudio_device_transport" *: *"coreaudio_device_type_builtin"/ { builtin = 1 }
+    /"coreaudio_device_input" *: *[1-9]/ { input = 1 }
+    /\}/ { if (builtin && input) found = 1; builtin = 0; input = 0 }
+    END { exit !found }
+  '
+}
+
+# Say something only when the built-in mic is genuinely missing and the user can
+# act on it. Three guards, all required:
+#   - we recorded a built-in mic when this session started, so a Mac mini or
+#     Studio (no built-in mic ever) never gets a false alarm;
+#   - the lid is open, because with it shut the mic is SUPPOSED to be off;
+#   - the mic is in fact gone now.
+# Deliberately does NOT restart coreaudiod itself — that is a systemwide daemon
+# and killing it cuts audio in every running app, which is not a thing a sleep
+# utility should do behind your back. It prints the command instead.
+report_missing_mic() {
+  [[ -f "$MICFILE" ]] || return 0
+  lid_closed && return 0
+  builtin_mic_present && return 0
+  cat >&2 <<'EOF'
+🎙  Your built-in microphone hasn't come back. macOS turns it off while the lid
+    is closed, and sometimes the audio daemon doesn't re-register it on the way
+    back. Restart the daemon and it reappears:
+
+        sudo killall coreaudiod
+
+    It relaunches itself. Any app recording or on a call right now loses its
+    audio, so do this between calls.
+EOF
 }
 
 # Drop dead-PID / expired session markers so no command acts on a ghost.
@@ -155,6 +201,8 @@ off | stop | none | 0)
   stop_caffeinate
   restore_lid_if_needed
   echo "☕️→😴  Caffeine off. Your Mac can sleep normally now."
+  report_missing_mic
+  rm -f "$MICFILE"
   exit 0
   ;;
 status | st)
@@ -177,6 +225,7 @@ status | st)
   if sleep_disabled_now && ! session_active; then
     echo "⚠️  Sleep is disabled system-wide but no awake session is tracked — run  awake off  to restore normal sleep." >&2
   fi
+  report_missing_mic
   exit 0
   ;;
 -h | --help | help)
@@ -223,6 +272,14 @@ stop_caffeinate # replace any caffeinate we already started
 # keep disablesleep=1 in force while we print "closing the lid will still
 # sleep," which would be a lie.
 restore_lid_if_needed
+
+# Record whether a built-in mic exists BEFORE the lid can close, so that after
+# the session we can tell "macOS didn't give it back" apart from "this Mac never
+# had one." Only meaningful for a lid session; idle-only sessions never lose it.
+rm -f "$MICFILE"
+if ((lid_ok == 1)) && builtin_mic_present; then
+  echo 1 >"$MICFILE"
+fi
 
 nohup caffeinate -dimsu -t "$seconds" >/dev/null 2>&1 &
 printf '%s %s\n' "$!" "$seconds" >"$PIDFILE"

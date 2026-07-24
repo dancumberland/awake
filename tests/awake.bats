@@ -199,3 +199,125 @@ SH
   [ "$status" -ne 0 ]
   [[ "$output" == *"only works on macOS"* ]]
 }
+
+# --- built-in mic recovery notice ---
+#
+# Helpers write stub `system_profiler` / `ioreg` into the per-test PATH dir, so
+# these never read the host's real audio devices or lid state.
+
+stub_mic() { # stub_mic present|absent
+  if [[ "$1" == "present" ]]; then
+    cat >"$STUB_BIN/system_profiler" <<'SH'
+#!/bin/bash
+cat <<'JSON'
+{
+  "SPAudioDataType" : [
+    {
+      "_items" : [
+        {
+          "_name" : "MacBook Pro Microphone",
+          "coreaudio_device_input" : 1,
+          "coreaudio_device_transport" : "coreaudio_device_type_builtin"
+        }
+      ]
+    }
+  ]
+}
+JSON
+SH
+  else
+    cat >"$STUB_BIN/system_profiler" <<'SH'
+#!/bin/bash
+cat <<'JSON'
+{
+  "SPAudioDataType" : [
+    {
+      "_items" : [
+        {
+          "_name" : "MacBook Pro Speakers",
+          "coreaudio_device_output" : 2,
+          "coreaudio_device_transport" : "coreaudio_device_type_builtin"
+        },
+        {
+          "_name" : "ZoomAudioDevice",
+          "coreaudio_device_input" : 2,
+          "coreaudio_device_transport" : "coreaudio_device_type_virtual"
+        }
+      ]
+    }
+  ]
+}
+JSON
+SH
+  fi
+  chmod +x "$STUB_BIN/system_profiler"
+}
+
+stub_lid() { # stub_lid open|closed
+  local state=No
+  [[ "$1" == "closed" ]] && state=Yes
+  cat >"$STUB_BIN/ioreg" <<SH
+#!/bin/bash
+echo '    |   "AppleClamshellState" = $state'
+SH
+  chmod +x "$STUB_BIN/ioreg"
+}
+
+@test "off warns when the built-in mic did not come back" {
+  echo 1 >"$AWAKE_STATE_DIR/mic" # a built-in mic existed when the session began
+  stub_mic absent
+  stub_lid open
+
+  run "$AWAKE" off
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"built-in microphone hasn't come back"* ]]
+  [[ "$output" == *"sudo killall coreaudiod"* ]]
+
+  # awake reports the fix, it does not run it
+  [ ! -f "$SUDO_LOG" ] || ! grep -q 'killall' "$SUDO_LOG"
+  # marker cleared so the next session starts clean
+  [ ! -f "$AWAKE_STATE_DIR/mic" ]
+}
+
+@test "off stays quiet when the mic came back" {
+  echo 1 >"$AWAKE_STATE_DIR/mic"
+  stub_mic present
+  stub_lid open
+
+  run "$AWAKE" off
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"microphone"* ]]
+}
+
+@test "no mic warning on a Mac that never had a built-in mic" {
+  # no mic marker was ever written, because none was found at session start
+  stub_mic absent
+  stub_lid open
+
+  run "$AWAKE" off
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"microphone"* ]]
+}
+
+@test "no mic warning while the lid is still closed" {
+  echo 1 >"$AWAKE_STATE_DIR/mic"
+  stub_mic absent
+  stub_lid closed # mic is SUPPOSED to be off right now
+
+  run "$AWAKE" off
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"microphone"* ]]
+}
+
+@test "status warns after a session expired on its own and the mic is gone" {
+  echo 1 >"$AWAKE_STATE_DIR/mic"
+  stub_mic absent
+  stub_lid open
+
+  run "$AWAKE" status
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Not currently caffeinated"* ]]
+  [[ "$output" == *"sudo killall coreaudiod"* ]]
+  # status is read-only: the marker survives so a later `off` still reports it
+  [ -f "$AWAKE_STATE_DIR/mic" ]
+}

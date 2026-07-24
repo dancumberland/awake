@@ -72,13 +72,21 @@ You can decline the password prompt. `awake` falls back to idle-only protection.
 
 While the lid is closed, macOS turns off the built-in microphone and the built-in camera. They disappear from the device list in System Settings and in apps like Zoom. This is macOS behavior in clamshell mode, not something `awake` does — `awake` only touches `caffeinate` and `pmset`.
 
-Opening the lid brings both devices back. If the microphone is still missing after you open it, the audio daemon didn't re-register the device. Restart it:
+Opening the lid usually brings both devices back. Sometimes the audio daemon doesn't re-register the microphone, and it stays missing. Because that happens right after an `awake` session, it looks like `awake` broke your microphone.
 
-```sh
-sudo killall coreaudiod
+So `awake` checks. When a lid session starts, it records whether this Mac has a built-in microphone. Later, `awake off` and `awake status` tell you if it hasn't come back:
+
+```
+🎙  Your built-in microphone hasn't come back. macOS turns it off while the lid
+    is closed, and sometimes the audio daemon doesn't re-register it on the way
+    back. Restart the daemon and it reappears:
+
+        sudo killall coreaudiod
 ```
 
-It relaunches on its own within a second or two, and the built-in microphone comes back. Any app that is recording or on a call at that moment will drop its audio, so do this between calls.
+The daemon relaunches on its own within a second or two, and the microphone comes back. Any app recording or on a call at that moment loses its audio, so run it between calls.
+
+`awake` prints that command rather than running it. `coreaudiod` is systemwide, and restarting it cuts audio in every open app — not something a sleep utility should do on your behalf. It also stays quiet in the three cases where the message would be wrong: on a Mac with no built-in microphone at all, while the lid is still closed (the microphone is meant to be off then), and when the microphone came back normally.
 
 ## Uninstall
 
