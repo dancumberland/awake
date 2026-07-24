@@ -1,0 +1,5 @@
+#!/bin/bash
+# Stub used ONLY when recording assets/demo.gif — see sudo stub for why.
+# A harmless placeholder process so `awake status` sees a live session during
+# the recording. `awake` backgrounds this itself; `awake off` kills it by PID.
+exec sleep 3600

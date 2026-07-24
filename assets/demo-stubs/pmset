@@ -1,0 +1,9 @@
+#!/bin/bash
+# Stub used ONLY when recording assets/demo.gif — see sudo stub for why.
+# Reports SleepDisabled as always 0 and accepts writes as no-ops, so the
+# recording never touches the real Mac's sleep settings.
+if [[ "$1" == "-g" ]]; then
+  printf ' SleepDisabled\t\t0\n'
+  exit 0
+fi
+exit 0

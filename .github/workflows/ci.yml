@@ -1,0 +1,24 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint-and-test:
+    name: shellcheck + shfmt + bats
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: brew install shellcheck shfmt bats-core
+
+      - name: shellcheck
+        run: shellcheck bin/awake
+
+      - name: shfmt (fail if unformatted)
+        run: shfmt -i 2 -d bin/awake
+
+      - name: bats
+        run: bats tests/awake.bats

@@ -1,0 +1,244 @@
+#!/bin/bash
+# awake — keep this Mac awake for N hours, even with the lid closed.
+#
+#   awake            prompt for hours
+#   awake 1          stay awake 1 hour
+#   awake .5         stay awake 30 minutes
+#   awake 24         stay awake a full day
+#   awake off        let the Mac sleep normally again
+#   awake status     show how much awake-time is left
+#   awake --version  print version
+#   awake -h         show this help
+#
+# Keeps the display + system awake AND disables lid-close (clamshell) sleep,
+# so you can shut the lid and keep running. Needs your Mac password once per
+# session (disabling clamshell sleep requires admin). Survives closing the
+# terminal; does NOT survive a reboot.
+#
+# Heads up: with the lid closed on battery, the Mac runs full-power with the
+# screen off — it WILL drain the battery. Plug in for long sessions.
+
+set -euo pipefail
+
+VERSION="1.0.0"
+
+STATE="${AWAKE_STATE_DIR:-$HOME/.cache/awake}"
+PIDFILE="$STATE/pid"
+UNTILFILE="$STATE/until"
+LIDFILE="$STATE/lid"
+
+die() {
+  echo "awake: $*" >&2
+  exit 1
+}
+
+# caffeinate + pmset are macOS-only. Fail fast with a clear line instead of a
+# confusing "command not found" deep inside a command.
+[[ "$(uname)" == "Darwin" ]] || die "only works on macOS (needs caffeinate + pmset)."
+
+mkdir -p "$STATE"
+
+usage() {
+  cat <<'EOF'
+awake — keep this Mac awake for N hours, even with the lid closed.
+
+  awake            prompt for hours
+  awake 1          stay awake 1 hour
+  awake .5         stay awake 30 minutes
+  awake 24         stay awake a full day
+  awake off        let the Mac sleep normally again
+  awake status     show how much awake-time is left
+  awake --version  print version
+  awake -h         show this help
+
+Keeps the display + system awake AND disables lid-close (clamshell) sleep,
+so you can shut the lid and keep running. Needs your Mac password once per
+session (disabling clamshell sleep requires admin). Survives closing the
+terminal; does NOT survive a reboot.
+
+Heads up: with the lid closed on battery, the Mac runs full-power with the
+screen off — it WILL drain the battery. Plug in for long sessions.
+EOF
+}
+
+clock() { date -r "$1" '+%-I:%M %p'; } # epoch seconds -> "4:57 PM"
+
+# True only when the caffeinate we recorded is still running AND its timer
+# hasn't passed — i.e. a genuine, live awake session (not a ghost from a
+# reboot or an expired timer whose files linger).
+session_active() {
+  [[ -f "$PIDFILE" && -f "$UNTILFILE" ]] || return 1
+  local p _
+  read -r p _ <"$PIDFILE" 2>/dev/null || return 1
+  [[ -n "${p:-}" ]] && kill -0 "$p" 2>/dev/null || return 1
+  local now until_epoch
+  now=$(date +%s)
+  until_epoch=$(cat "$UNTILFILE" 2>/dev/null || echo 0)
+  [[ "$until_epoch" =~ ^[0-9]+$ ]] || return 1
+  ((until_epoch > now))
+}
+
+# Read LIVE clamshell-sleep state, no sudo. `pmset -g` needs no admin to READ;
+# only WRITING disablesleep does. Returns 0 (true) when sleep is disabled
+# system-wide right now — whatever our tracked files happen to say.
+sleep_disabled_now() {
+  local v
+  v=$(pmset -g 2>/dev/null | awk '/SleepDisabled/ {print $2; exit}') || true
+  [[ "$v" == "1" ]]
+}
+
+# Drop dead-PID / expired session markers so no command acts on a ghost.
+cleanup_stale() {
+  if [[ -f "$PIDFILE" || -f "$UNTILFILE" ]] && ! session_active; then
+    rm -f "$PIDFILE" "$UNTILFILE"
+  fi
+}
+
+# Stop the caffeinate we started.
+stop_caffeinate() {
+  local p="" secs=""
+  if [[ -f "$PIDFILE" ]]; then
+    read -r p secs <"$PIDFILE" 2>/dev/null || true
+    if [[ -n "${p:-}" ]] && kill -0 "$p" 2>/dev/null; then
+      kill "$p" 2>/dev/null || true
+    fi
+  fi
+  # Fallback for an orphaned caffeinate we can no longer PID-track (e.g. the
+  # pid file was cleared by hand). This is a PATTERN match on the command line,
+  # NOT proof of ownership: pkill signals ANY process whose argv matches. When
+  # we still know the exact `-t <seconds>` we launched with, we anchor the
+  # pattern to it, which makes an accidental hit on an unrelated caffeinate
+  # unlikely — but nothing here guarantees the match is the process we started.
+  # caffeinate's flags are stable and no common tool uses this exact
+  # invocation, so we accept that tradeoff.
+  if [[ "${secs:-}" =~ ^[0-9]+$ ]]; then
+    pkill -f "caffeinate -dimsu -t ${secs}\$" 2>/dev/null || true
+  else
+    pkill -f 'caffeinate -dimsu -t' 2>/dev/null || true
+  fi
+  rm -f "$PIDFILE" "$UNTILFILE"
+}
+
+# Restore normal clamshell sleep — but only reach for sudo when LIVE system
+# state actually shows sleep disabled. This is the reboot-proof half of the
+# fix: it trusts `pmset -g`, not the lid marker, so a stuck disablesleep=1 with
+# no tracked session (dead caffeinate, wiped/edited cache) still gets cleared.
+# When no lid session was ever active, SleepDisabled is already 0 and this
+# stays password-free.
+restore_lid_if_needed() {
+  if sleep_disabled_now; then
+    echo "🔒  Restoring normal sleep needs admin access (your Mac password)."
+    sudo pkill -f 'awake-lid-guard' 2>/dev/null || true
+    sudo pmset -a disablesleep 0 2>/dev/null || true
+    if sleep_disabled_now; then
+      echo "⚠️  Couldn't restore sleep — it's still disabled. Try:  sudo pmset -a disablesleep 0" >&2
+    fi
+  fi
+  rm -f "$LIDFILE"
+}
+
+cleanup_stale
+
+cmd="${1:-}"
+
+case "$cmd" in
+off | stop | none | 0)
+  stop_caffeinate
+  restore_lid_if_needed
+  echo "☕️→😴  Caffeine off. Your Mac can sleep normally now."
+  exit 0
+  ;;
+status | st)
+  if session_active; then
+    now=$(date +%s)
+    until_epoch=$(cat "$UNTILFILE")
+    left=$((until_epoch - now))
+    if [[ -f "$LIDFILE" ]]; then
+      printf "☕️🔒  Awake for %dh %dm more (until %s) — lid can be closed.\n" \
+        $((left / 3600)) $(((left % 3600) / 60)) "$(clock "$until_epoch")"
+    else
+      printf "☕️  Awake for %dh %dm more (until %s) — idle only.\n" \
+        $((left / 3600)) $(((left % 3600) / 60)) "$(clock "$until_epoch")"
+    fi
+  else
+    echo "😴  Not currently caffeinated."
+  fi
+  # Detection half of the reboot fix: surface a stuck disablesleep even when
+  # nothing is tracked, so the user knows how to recover.
+  if sleep_disabled_now && ! session_active; then
+    echo "⚠️  Sleep is disabled system-wide but no awake session is tracked — run  awake off  to restore normal sleep." >&2
+  fi
+  exit 0
+  ;;
+-h | --help | help)
+  usage
+  exit 0
+  ;;
+--version | version)
+  echo "awake $VERSION"
+  exit 0
+  ;;
+esac
+
+# --- start a new awake session ---
+hours="$cmd"
+if [[ -z "$hours" ]]; then
+  read -rp "Keep Mac awake for how many hours? (.5=30min · 1=1hr · 24=day): " hours || true
+fi
+
+# Validate BEFORE any arithmetic. The regex gate guarantees $hours is a plain
+# number, so interpolating it into awk below can't inject anything.
+if ! [[ "$hours" =~ ^[0-9]*\.?[0-9]+$ ]] || awk "BEGIN{exit !($hours <= 0)}"; then
+  die "please give a positive number of hours, e.g. .5, 1, or 24."
+fi
+
+seconds=$(awk "BEGIN{printf \"%d\", $hours * 3600}")
+((seconds < 1)) && seconds=1
+
+# Disabling clamshell sleep needs admin. Prompt once up front and cache the
+# credential so the background guard starts without a second prompt. Cancel the
+# password to fall back to idle-only awake (closing the lid will still sleep).
+lid_ok=0
+echo "🔒  Keeping the lid awake needs admin access (your Mac password)."
+if sudo -v; then
+  lid_ok=1
+else
+  echo "    No password given — starting idle-only (closing the lid will still sleep)."
+fi
+
+stop_caffeinate # replace any caffeinate we already started
+
+# Tear down any guard left over from an earlier session. Live-state-checked
+# (like `off`), so this still runs even if this invocation's own password
+# prompt below is declined — a stale guard from a PRIOR session can otherwise
+# keep disablesleep=1 in force while we print "closing the lid will still
+# sleep," which would be a lie.
+restore_lid_if_needed
+
+nohup caffeinate -dimsu -t "$seconds" >/dev/null 2>&1 &
+printf '%s %s\n' "$!" "$seconds" >"$PIDFILE"
+echo "$(($(date +%s) + seconds))" >"$UNTILFILE"
+
+if ((lid_ok == 1)); then
+  # One root-owned guard: disable clamshell sleep, wait out the timer, restore.
+  # Runs entirely as root (already elevated) so it never re-prompts. The
+  # 'awake-lid-guard' marker lets `awake off` find and kill it. nohup so it
+  # survives closing this terminal.
+  nohup sudo bash -c ': awake-lid-guard ; pmset -a disablesleep 1 ; sleep '"$seconds"' ; pmset -a disablesleep 0' >/dev/null 2>&1 &
+  echo "$(($(date +%s) + seconds))" >"$LIDFILE"
+fi
+
+h=$((seconds / 3600))
+m=$(((seconds % 3600) / 60))
+dur=""
+((h > 0)) && dur="${h}h"
+((m > 0)) && dur="${dur}${m}m"
+[[ -z "$dur" ]] && dur="${seconds}s"
+
+if ((lid_ok == 1)); then
+  printf "☕️🔒  Mac will stay awake for %s (until %s) — lid can be CLOSED.\n" "$dur" "$(clock "$(cat "$UNTILFILE")")"
+  echo "    Runs full-power with the screen off — plug in for long sessions."
+else
+  printf "☕️  Mac will stay awake for %s (until %s) — idle only.\n" "$dur" "$(clock "$(cat "$UNTILFILE")")"
+fi
+echo "    Close this terminal freely. Stop early (and restore sleep) with:  awake off"

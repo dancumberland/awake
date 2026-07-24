@@ -1,0 +1,11 @@
+#!/bin/bash
+# Stub used ONLY when recording assets/demo.gif via `vhs assets/demo.tape`.
+# Never elevates to real root — just runs the given command as the current
+# user, so the recording can show a successful lid-close session with no real
+# password prompt and no real system changes. Not shipped as part of `awake`
+# itself; lives here purely to make the demo reproducible.
+if [[ "$1" == "-v" ]]; then
+  exit 0
+fi
+shift
+exec "$@"
