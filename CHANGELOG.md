@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Documentation
+- Note that macOS turns off the built-in microphone and camera while the lid is closed, and give the `sudo killall coreaudiod` recovery for when the microphone doesn't come back on its own. No behavior change — `awake` never touched audio.
+
 ## [1.0.0]
 
 Initial public release.

@@ -68,6 +68,18 @@ You can decline the password prompt. `awake` falls back to idle-only protection.
 > [!WARNING]
 > With the lid closed, the Mac runs at full power with the screen off. That drains the battery faster than sleep does. Plug in for long sessions.
 
+## Built-in microphone and camera
+
+While the lid is closed, macOS turns off the built-in microphone and the built-in camera. They disappear from the device list in System Settings and in apps like Zoom. This is macOS behavior in clamshell mode, not something `awake` does — `awake` only touches `caffeinate` and `pmset`.
+
+Opening the lid brings both devices back. If the microphone is still missing after you open it, the audio daemon didn't re-register the device. Restart it:
+
+```sh
+sudo killall coreaudiod
+```
+
+It relaunches on its own within a second or two, and the built-in microphone comes back. Any app that is recording or on a call at that moment will drop its audio, so do this between calls.
+
 ## Uninstall
 
 Homebrew:

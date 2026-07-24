@@ -17,6 +17,10 @@
 #
 # Heads up: with the lid closed on battery, the Mac runs full-power with the
 # screen off — it WILL drain the battery. Plug in for long sessions.
+#
+# Also: macOS turns off the built-in mic and camera while the lid is closed.
+# They come back when you open it. If the mic is still missing, run
+# `sudo killall coreaudiod` (it relaunches itself) between calls.
 
 set -euo pipefail
 
@@ -58,6 +62,11 @@ terminal; does NOT survive a reboot.
 
 Heads up: with the lid closed on battery, the Mac runs full-power with the
 screen off — it WILL drain the battery. Plug in for long sessions.
+
+macOS also turns off the built-in mic and camera while the lid is closed.
+They come back when you open it. If the mic is still missing, run
+  sudo killall coreaudiod
+between calls — it relaunches itself and the mic reappears.
 EOF
 }
 
