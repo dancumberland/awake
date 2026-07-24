@@ -7,7 +7,7 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   exit 1
 fi
 
-REPO_RAW="https://raw.githubusercontent.com/dancumberland/awake/main/bin/awake"
+REPO_RAW="https://raw.githubusercontent.com/dancumberland/awake/master/bin/awake"
 DEST="/usr/local/bin/awake"
 TMP="$(mktemp)"
 trap 'rm -f "$TMP"' EXIT

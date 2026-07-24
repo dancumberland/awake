@@ -24,13 +24,17 @@
 Homebrew:
 
 ```sh
-brew install dancumberland/awake/awake
+brew tap dancumberland/awake
+brew trust dancumberland/awake
+brew install awake
 ```
+
+(Recent Homebrew requires trusting a tap before it will load formulae from it — that's the `brew trust` line, not an optional step.)
 
 Or run the install script, which drops a single file into `/usr/local/bin`:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/dancumberland/awake/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/dancumberland/awake/master/install.sh | bash
 ```
 
 ## Usage
