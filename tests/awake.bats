@@ -149,8 +149,8 @@ SH
 
 # --- microphone-safe mode ---
 
-@test "mic mode keeps the built-in mic available without sudo or lid bypass" {
-  run "$AWAKE" mic 1
+@test "default mode keeps the built-in mic available without sudo or lid bypass" {
+  run "$AWAKE" 1
   [ "$status" -eq 0 ]
   [[ "$output" == *"built-in mic available"* ]]
   for _ in {1..20}; do
@@ -161,6 +161,23 @@ SH
   [ ! -f "$SUDO_LOG" ]
   [ ! -f "$AWAKE_STATE_DIR/lid" ]
   [ "$(cat "$AWAKE_STATE_DIR/mode")" = "mic" ]
+}
+
+@test "mic is an alias for the default mode" {
+  run "$AWAKE" mic 1
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"built-in mic available"* ]]
+  [ ! -f "$SUDO_LOG" ]
+  [ "$(cat "$AWAKE_STATE_DIR/mode")" = "mic" ]
+}
+
+@test "lid mode explicitly requests admin access and enables lid-close operation" {
+  run "$AWAKE" lid 1
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"lid can be CLOSED"* ]]
+  grep -q 'sudo -v' "$SUDO_LOG"
+  [ -f "$AWAKE_STATE_DIR/lid" ]
+  [ ! -f "$AWAKE_STATE_DIR/mode" ]
 }
 
 @test "status identifies a live microphone-safe session" {
@@ -179,7 +196,7 @@ SH
 @test "--version prints the version and exits 0" {
   run "$AWAKE" --version
   [ "$status" -eq 0 ]
-  [[ "$output" == *"awake 1.1.0"* ]]
+  [[ "$output" == *"awake 2.0.0"* ]]
 }
 
 @test "-h prints help and exits 0" {

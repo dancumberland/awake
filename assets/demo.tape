@@ -2,9 +2,8 @@
 #   brew install vhs
 #   cd awake && vhs assets/demo.tape
 #
-# The lid-close/sudo path is recorded against the stub sudo/pmset/caffeinate
-# in assets/demo-stubs/ (see those files for why) — no real password prompt,
-# no real change to this machine's sleep settings.
+# The demo records the default mic-safe path. Its fake caffeinate command lives
+# in assets/demo-stubs/, so recording never changes this machine's sleep state.
 
 Output assets/demo.gif
 

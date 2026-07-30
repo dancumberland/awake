@@ -2,7 +2,7 @@
 
 # awake
 
-*Keep your Mac awake, even with the lid closed.*
+*Keep your Mac awake with its built-in mic available.*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![CI](https://github.com/dancumberland/awake/actions/workflows/ci.yml/badge.svg)](https://github.com/dancumberland/awake/actions/workflows/ci.yml)
@@ -15,7 +15,7 @@
 
 ## Why this exists
 
-`caffeinate` is the macOS command for keeping a Mac awake while it sits idle. Menu-bar apps like KeepingYouAwake (6,778 stars) wrap it. None of them can keep the Mac awake once the lid is shut, because closing the lid triggers a firmware-level sleep that no `caffeinate` power assertion can hold off. `awake` handles that case by toggling a systemwide power-management setting for the length of your session, then restoring it when the session ends.
+`caffeinate` is the macOS command for keeping a Mac awake while it sits idle. `awake` wraps it with a timer and survives closing the terminal. The default mode keeps the lid open so the built-in microphone and camera remain available. When you explicitly need lid-closed operation, `awake lid` temporarily changes the system power setting and restores it when the session ends.
 
 ![Diagram comparing caffeinate's idle-sleep coverage with awake's added lid-close coverage](assets/lid-close.svg)
 
@@ -41,11 +41,12 @@ curl -fsSL https://raw.githubusercontent.com/dancumberland/awake/master/install.
 
 | Command | What it does |
 | --- | --- |
-| `awake` | Prompt for how many hours to stay awake |
-| `awake 1` | Stay awake for 1 hour |
-| `awake .5` | Stay awake for 30 minutes |
-| `awake 24` | Stay awake for a full day |
-| `awake mic 1` | Stay awake for 1 hour with the built-in mic available (lid open) |
+| `awake` | Prompt for a mic-safe, lid-open session |
+| `awake 1` | Stay awake for 1 hour with the built-in mic available |
+| `awake .5` | Stay awake for 30 minutes with the built-in mic available |
+| `awake 24` | Stay awake for a full day with the built-in mic available |
+| `awake lid 1` | Stay awake for 1 hour with the lid closed (built-in mic unavailable) |
+| `awake mic 1` | Explicit alias for `awake 1` |
 | `awake off` | Let the Mac sleep normally again, including on a lid close |
 | `awake status` | Show how much awake-time is left |
 
@@ -53,20 +54,22 @@ curl -fsSL https://raw.githubusercontent.com/dancumberland/awake/master/install.
 
 A session survives closing the terminal. The process is nohup'd and reparents to launchd, so it keeps running until the timer ends or you run `awake off`.
 
-### Mic-safe mode
+### Built-in microphone by default
 
-Use `awake mic [hours]` when you need the MacBook's built-in microphone. It keeps the system awake, lets the built-in display sleep, and needs no administrator password. Keep the lid open: macOS disables the built-in microphone and camera when it is closed. Use an external microphone for lid-closed sessions.
+The default `awake [hours]` mode keeps the system awake, lets the built-in display sleep, and needs no administrator password. Keep the lid open and the built-in microphone remains available. `awake mic [hours]` does the same thing as an explicit alias.
+
+Use `awake lid [hours]` when you need to shut the lid. macOS disables the built-in microphone and camera in that physical state, so lid-closed sessions require an external microphone.
 
 ## What it does with `sudo`, exactly
 
-To hold sleep off while the lid is closed, `awake` changes one systemwide setting that macOS only lets root change. It runs two commands as root, and only these two:
+In explicit `awake lid` mode, Awake changes one systemwide setting that macOS only lets root change. It runs two commands as root, and only these two:
 
 - `pmset -a disablesleep 1` when a session starts, to block clamshell sleep.
 - `pmset -a disablesleep 0` when the session ends or the timer runs out, to restore normal sleep.
 
 That covers the entire use of root. This setting applies to the whole system, so macOS asks for an admin password to change it.
 
-You can decline the password prompt. `awake` falls back to idle-only protection. Nothing fails or crashes, and every command works as usual. The Mac stays awake while the lid is open, and closing the lid lets it sleep.
+You can decline the password prompt. `awake lid` falls back to lid-open protection. Nothing fails or crashes, and closing the lid lets the Mac sleep.
 
 ## Battery
 

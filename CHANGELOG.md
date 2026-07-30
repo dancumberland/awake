@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [2.0.0] - 2026-07-30
+
+### Changed
+- `awake [hours]` now defaults to lid-open operation so the built-in microphone and camera remain available. The display may sleep and no administrator password is required.
+- Lid-closed operation is now explicit: use `awake lid [hours]`. The built-in microphone and camera remain unavailable while the lid is physically closed, so that mode requires external devices.
+- `awake mic [hours]` remains as a compatible alias for the new default.
+
 ## [1.1.0] - 2026-07-30
 
 ### Added

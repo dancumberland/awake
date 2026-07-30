@@ -1,20 +1,21 @@
 #!/bin/bash
-# awake — keep this Mac awake for N hours, even with the lid closed.
+# awake — keep this Mac awake for N hours with its built-in mic available.
 #
 #   awake            prompt for hours
 #   awake 1          stay awake 1 hour
 #   awake .5         stay awake 30 minutes
 #   awake 24         stay awake a full day
-#   awake mic 1      stay awake with the built-in mic available (lid open)
+#   awake lid 1      stay awake even with the lid closed (built-in mic off)
+#   awake mic 1      explicit alias for the default mic-safe mode
 #   awake off        let the Mac sleep normally again
 #   awake status     show how much awake-time is left
 #   awake --version  print version
 #   awake -h         show this help
 #
-# Keeps the display + system awake AND disables lid-close (clamshell) sleep,
-# so you can shut the lid and keep running. Needs your Mac password once per
-# session (disabling clamshell sleep requires admin). Survives closing the
-# terminal; does NOT survive a reboot.
+# Keeps the system awake while allowing the display to sleep. The lid stays
+# open, so the built-in mic and camera remain available. `awake lid [hours]`
+# explicitly enables lid-closed operation and needs your Mac password once per
+# session. Survives closing the terminal; does NOT survive a reboot.
 #
 # Heads up: with the lid closed on battery, the Mac runs full-power with the
 # screen off — it WILL drain the battery. Plug in for long sessions.
@@ -25,7 +26,7 @@
 
 set -euo pipefail
 
-VERSION="1.1.0"
+VERSION="2.0.0"
 
 STATE="${AWAKE_STATE_DIR:-$HOME/.cache/awake}"
 PIDFILE="$STATE/pid"
@@ -47,22 +48,26 @@ mkdir -p "$STATE"
 
 usage() {
   cat <<'EOF'
-awake — keep this Mac awake for N hours, even with the lid closed.
+awake — keep this Mac awake for N hours with its built-in mic available.
 
   awake            prompt for hours
   awake 1          stay awake 1 hour
   awake .5         stay awake 30 minutes
   awake 24         stay awake a full day
-  awake mic 1      stay awake with the built-in mic available (lid open)
+  awake lid 1      stay awake even with the lid closed (built-in mic off)
+  awake mic 1      explicit alias for the default mic-safe mode
   awake off        let the Mac sleep normally again
   awake status     show how much awake-time is left
   awake --version  print version
   awake -h         show this help
 
-Keeps the display + system awake AND disables lid-close (clamshell) sleep,
-so you can shut the lid and keep running. Needs your Mac password once per
-session (disabling clamshell sleep requires admin). Survives closing the
-terminal; does NOT survive a reboot.
+Keeps the system awake while allowing the display to sleep. Keep the lid open:
+the built-in microphone and camera remain available, and no admin password is
+needed. Survives closing the terminal; does NOT survive a reboot.
+
+`awake lid [hours]` also disables lid-close (clamshell) sleep, so the Mac keeps
+running with the lid shut. That mode needs an admin password. macOS turns off
+the built-in mic and camera whenever the lid is closed, so use an external mic.
 
 Heads up: with the lid closed on battery, the Mac runs full-power with the
 screen off — it WILL drain the battery. Plug in for long sessions.
@@ -71,9 +76,7 @@ macOS also turns off the built-in mic and camera while the lid is closed. They
 come back when you open it. If the mic doesn't come back, `awake off` and
 `awake status` notice and print the one command that restores it.
 
-`awake mic [hours]` keeps the system awake while allowing the built-in display
-to sleep. Keep the lid open: the built-in microphone remains available and no
-admin password is needed. An external microphone is required for lid-closed use.
+`awake mic [hours]` remains as an explicit alias for the default behavior.
 EOF
 }
 
@@ -204,9 +207,12 @@ restore_lid_if_needed() {
 cleanup_stale
 
 cmd="${1:-}"
-mic_mode=0
+mic_mode=1
 if [[ "$cmd" == "mic" ]]; then
-  mic_mode=1
+  shift
+  cmd="${1:-}"
+elif [[ "$cmd" == "lid" || "$cmd" == "closed" ]]; then
+  mic_mode=0
   shift
   cmd="${1:-}"
 fi
@@ -262,7 +268,7 @@ if [[ -z "$hours" ]]; then
   if ((mic_mode == 1)); then
     read -rp "Keep Mac awake with its built-in mic for how many hours? (.5=30min · 1=1hr · 24=day): " hours || true
   else
-    read -rp "Keep Mac awake for how many hours? (.5=30min · 1=1hr · 24=day): " hours || true
+    read -rp "Keep Mac awake with the lid closed for how many hours? (.5=30min · 1=1hr · 24=day): " hours || true
   fi
 fi
 
@@ -280,7 +286,7 @@ seconds=$(awk "BEGIN{printf \"%d\", $hours * 3600}")
 # password to fall back to idle-only awake (closing the lid will still sleep).
 lid_ok=0
 if ((mic_mode == 1)); then
-  echo "🎙  Mic mode keeps the built-in microphone available while the lid stays open."
+  echo "🎙  Keeping the built-in microphone available while the lid stays open."
 else
   echo "🔒  Keeping the lid awake needs admin access (your Mac password)."
   if sudo -v; then
