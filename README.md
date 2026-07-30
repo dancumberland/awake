@@ -45,12 +45,17 @@ curl -fsSL https://raw.githubusercontent.com/dancumberland/awake/master/install.
 | `awake 1` | Stay awake for 1 hour |
 | `awake .5` | Stay awake for 30 minutes |
 | `awake 24` | Stay awake for a full day |
+| `awake mic 1` | Stay awake for 1 hour with the built-in mic available (lid open) |
 | `awake off` | Let the Mac sleep normally again, including on a lid close |
 | `awake status` | Show how much awake-time is left |
 
 `awake --version` prints the version. `awake -h`, `awake --help`, or `awake help` print usage.
 
 A session survives closing the terminal. The process is nohup'd and reparents to launchd, so it keeps running until the timer ends or you run `awake off`.
+
+### Mic-safe mode
+
+Use `awake mic [hours]` when you need the MacBook's built-in microphone. It keeps the system awake, lets the built-in display sleep, and needs no administrator password. Keep the lid open: macOS disables the built-in microphone and camera when it is closed. Use an external microphone for lid-closed sessions.
 
 ## What it does with `sudo`, exactly
 

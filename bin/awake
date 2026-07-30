@@ -5,6 +5,7 @@
 #   awake 1          stay awake 1 hour
 #   awake .5         stay awake 30 minutes
 #   awake 24         stay awake a full day
+#   awake mic 1      stay awake with the built-in mic available (lid open)
 #   awake off        let the Mac sleep normally again
 #   awake status     show how much awake-time is left
 #   awake --version  print version
@@ -24,13 +25,14 @@
 
 set -euo pipefail
 
-VERSION="1.0.0"
+VERSION="1.1.0"
 
 STATE="${AWAKE_STATE_DIR:-$HOME/.cache/awake}"
 PIDFILE="$STATE/pid"
 UNTILFILE="$STATE/until"
 LIDFILE="$STATE/lid"
 MICFILE="$STATE/mic"
+MODEFILE="$STATE/mode"
 
 die() {
   echo "awake: $*" >&2
@@ -51,6 +53,7 @@ awake — keep this Mac awake for N hours, even with the lid closed.
   awake 1          stay awake 1 hour
   awake .5         stay awake 30 minutes
   awake 24         stay awake a full day
+  awake mic 1      stay awake with the built-in mic available (lid open)
   awake off        let the Mac sleep normally again
   awake status     show how much awake-time is left
   awake --version  print version
@@ -67,6 +70,10 @@ screen off — it WILL drain the battery. Plug in for long sessions.
 macOS also turns off the built-in mic and camera while the lid is closed. They
 come back when you open it. If the mic doesn't come back, `awake off` and
 `awake status` notice and print the one command that restores it.
+
+`awake mic [hours]` keeps the system awake while allowing the built-in display
+to sleep. Keep the lid open: the built-in microphone remains available and no
+admin password is needed. An external microphone is required for lid-closed use.
 EOF
 }
 
@@ -168,8 +175,10 @@ stop_caffeinate() {
   # invocation, so we accept that tradeoff.
   if [[ "${secs:-}" =~ ^[0-9]+$ ]]; then
     pkill -f "caffeinate -dimsu -t ${secs}\$" 2>/dev/null || true
+    pkill -f "caffeinate -imsu -t ${secs}\$" 2>/dev/null || true
   else
     pkill -f 'caffeinate -dimsu -t' 2>/dev/null || true
+    pkill -f 'caffeinate -imsu -t' 2>/dev/null || true
   fi
   rm -f "$PIDFILE" "$UNTILFILE"
 }
@@ -195,6 +204,12 @@ restore_lid_if_needed() {
 cleanup_stale
 
 cmd="${1:-}"
+mic_mode=0
+if [[ "$cmd" == "mic" ]]; then
+  mic_mode=1
+  shift
+  cmd="${1:-}"
+fi
 
 case "$cmd" in
 off | stop | none | 0)
@@ -202,7 +217,7 @@ off | stop | none | 0)
   restore_lid_if_needed
   echo "☕️→😴  Caffeine off. Your Mac can sleep normally now."
   report_missing_mic
-  rm -f "$MICFILE"
+  rm -f "$MICFILE" "$MODEFILE"
   exit 0
   ;;
 status | st)
@@ -212,6 +227,9 @@ status | st)
     left=$((until_epoch - now))
     if [[ -f "$LIDFILE" ]]; then
       printf "☕️🔒  Awake for %dh %dm more (until %s) — lid can be closed.\n" \
+        $((left / 3600)) $(((left % 3600) / 60)) "$(clock "$until_epoch")"
+    elif [[ -f "$MODEFILE" && "$(cat "$MODEFILE")" == "mic" ]]; then
+      printf "☕️🎙  Awake for %dh %dm more (until %s) — lid open; built-in mic available.\n" \
         $((left / 3600)) $(((left % 3600) / 60)) "$(clock "$until_epoch")"
     else
       printf "☕️  Awake for %dh %dm more (until %s) — idle only.\n" \
@@ -241,7 +259,11 @@ esac
 # --- start a new awake session ---
 hours="$cmd"
 if [[ -z "$hours" ]]; then
-  read -rp "Keep Mac awake for how many hours? (.5=30min · 1=1hr · 24=day): " hours || true
+  if ((mic_mode == 1)); then
+    read -rp "Keep Mac awake with its built-in mic for how many hours? (.5=30min · 1=1hr · 24=day): " hours || true
+  else
+    read -rp "Keep Mac awake for how many hours? (.5=30min · 1=1hr · 24=day): " hours || true
+  fi
 fi
 
 # Validate BEFORE any arithmetic. The regex gate guarantees $hours is a plain
@@ -257,11 +279,15 @@ seconds=$(awk "BEGIN{printf \"%d\", $hours * 3600}")
 # credential so the background guard starts without a second prompt. Cancel the
 # password to fall back to idle-only awake (closing the lid will still sleep).
 lid_ok=0
-echo "🔒  Keeping the lid awake needs admin access (your Mac password)."
-if sudo -v; then
-  lid_ok=1
+if ((mic_mode == 1)); then
+  echo "🎙  Mic mode keeps the built-in microphone available while the lid stays open."
 else
-  echo "    No password given — starting idle-only (closing the lid will still sleep)."
+  echo "🔒  Keeping the lid awake needs admin access (your Mac password)."
+  if sudo -v; then
+    lid_ok=1
+  else
+    echo "    No password given — starting idle-only (closing the lid will still sleep)."
+  fi
 fi
 
 stop_caffeinate # replace any caffeinate we already started
@@ -276,12 +302,17 @@ restore_lid_if_needed
 # Record whether a built-in mic exists BEFORE the lid can close, so that after
 # the session we can tell "macOS didn't give it back" apart from "this Mac never
 # had one." Only meaningful for a lid session; idle-only sessions never lose it.
-rm -f "$MICFILE"
+rm -f "$MICFILE" "$MODEFILE"
 if ((lid_ok == 1)) && builtin_mic_present; then
   echo 1 >"$MICFILE"
 fi
 
-nohup caffeinate -dimsu -t "$seconds" >/dev/null 2>&1 &
+if ((mic_mode == 1)); then
+  echo mic >"$MODEFILE"
+  nohup caffeinate -imsu -t "$seconds" >/dev/null 2>&1 &
+else
+  nohup caffeinate -dimsu -t "$seconds" >/dev/null 2>&1 &
+fi
 printf '%s %s\n' "$!" "$seconds" >"$PIDFILE"
 echo "$(($(date +%s) + seconds))" >"$UNTILFILE"
 
@@ -301,7 +332,10 @@ dur=""
 ((m > 0)) && dur="${dur}${m}m"
 [[ -z "$dur" ]] && dur="${seconds}s"
 
-if ((lid_ok == 1)); then
+if ((mic_mode == 1)); then
+  printf "☕️🎙  Mac will stay awake for %s (until %s) — lid stays OPEN; built-in mic available.\n" "$dur" "$(clock "$(cat "$UNTILFILE")")"
+  echo "    The display may sleep; use an external microphone if you need the lid closed."
+elif ((lid_ok == 1)); then
   printf "☕️🔒  Mac will stay awake for %s (until %s) — lid can be CLOSED.\n" "$dur" "$(clock "$(cat "$UNTILFILE")")"
   echo "    Runs full-power with the screen off — plug in for long sessions."
 else

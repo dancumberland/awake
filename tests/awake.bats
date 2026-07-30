@@ -23,6 +23,7 @@ setup() {
   export PMSET_STATE_FILE="$BATS_TEST_TMPDIR/pmset_state"
   export PMSET_LOG="$BATS_TEST_TMPDIR/pmset.log"
   export SUDO_LOG="$BATS_TEST_TMPDIR/sudo.log"
+  export CAFFEINATE_LOG="$BATS_TEST_TMPDIR/caffeinate.log"
   echo 0 >"$PMSET_STATE_FILE" # default: sleep NOT disabled
 
   # fake pmset — reads/writes PMSET_STATE_FILE only, never the real host.
@@ -59,6 +60,7 @@ exit 0
 SH
   cat >"$STUB_BIN/caffeinate" <<'SH'
 #!/bin/bash
+echo "caffeinate $*" >>"$CAFFEINATE_LOG"
 exit 0
 SH
 
@@ -145,12 +147,39 @@ SH
   [[ "$output" == *"Awake for"* ]]
 }
 
+# --- microphone-safe mode ---
+
+@test "mic mode keeps the built-in mic available without sudo or lid bypass" {
+  run "$AWAKE" mic 1
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"built-in mic available"* ]]
+  for _ in {1..20}; do
+    [[ -f "$CAFFEINATE_LOG" ]] && break
+    sleep 0.05
+  done
+  grep -q 'caffeinate -imsu -t 3600' "$CAFFEINATE_LOG"
+  [ ! -f "$SUDO_LOG" ]
+  [ ! -f "$AWAKE_STATE_DIR/lid" ]
+  [ "$(cat "$AWAKE_STATE_DIR/mode")" = "mic" ]
+}
+
+@test "status identifies a live microphone-safe session" {
+  livepid=$$
+  printf '%s %s\n' "$livepid" 3600 >"$AWAKE_STATE_DIR/pid"
+  echo "$(($(date +%s) + 3600))" >"$AWAKE_STATE_DIR/until"
+  echo mic >"$AWAKE_STATE_DIR/mode"
+
+  run "$AWAKE" status
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"lid open; built-in mic available"* ]]
+}
+
 # --- help / version ---
 
 @test "--version prints the version and exits 0" {
   run "$AWAKE" --version
   [ "$status" -eq 0 ]
-  [[ "$output" == *"awake 1.0.0"* ]]
+  [[ "$output" == *"awake 1.1.0"* ]]
 }
 
 @test "-h prints help and exits 0" {

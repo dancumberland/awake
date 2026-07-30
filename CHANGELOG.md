@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.1.0] - 2026-07-30
+
+### Added
+- `awake mic [hours]` — keep the Mac running with its built-in microphone available while the lid stays open. The display may sleep and no administrator password is required.
+
 ## [1.0.0]
 
 Initial public release.
