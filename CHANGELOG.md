@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [3.0.0] - 2026-08-03
+
+### Changed
+- Restored the singular workflow: `awake [hours]` once again includes lid-closed operation by default. The separate `mic` and `lid` modes are removed.
+- Awake now watches for the lid to reopen and automatically restarts the Mac audio service only when the built-in microphone fails to return after a grace period.
+- The built-in microphone remains physically unavailable while the lid is shut; use an external microphone for audio input in that state.
+
 ## [2.0.0] - 2026-07-30
 
 ### Changed

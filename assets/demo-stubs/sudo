@@ -7,5 +7,5 @@
 if [[ "$1" == "-v" ]]; then
   exit 0
 fi
-shift
+[[ "$*" == *"awake-lid-guard"* ]] && exit 0
 exec "$@"

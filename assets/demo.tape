@@ -2,8 +2,8 @@
 #   brew install vhs
 #   cd awake && vhs assets/demo.tape
 #
-# The demo records the default mic-safe path. Its fake caffeinate command lives
-# in assets/demo-stubs/, so recording never changes this machine's sleep state.
+# The demo records the singular lid-close path against fake sudo, pmset, and
+# caffeinate commands, so recording never changes this machine's sleep state.
 
 Output assets/demo.gif
 

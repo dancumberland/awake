@@ -24,6 +24,7 @@ setup() {
   export PMSET_LOG="$BATS_TEST_TMPDIR/pmset.log"
   export SUDO_LOG="$BATS_TEST_TMPDIR/sudo.log"
   export CAFFEINATE_LOG="$BATS_TEST_TMPDIR/caffeinate.log"
+  export KILLALL_LOG="$BATS_TEST_TMPDIR/killall.log"
   echo 0 >"$PMSET_STATE_FILE" # default: sleep NOT disabled
 
   # fake pmset — reads/writes PMSET_STATE_FILE only, never the real host.
@@ -50,6 +51,7 @@ if [[ "$1" == "-v" || "$1" == "-n" ]]; then
   shift || true
   [[ $# -eq 0 ]] && exit 0
 fi
+[[ "$*" == *"awake-lid-guard"* ]] && exit 0
 exec "$@"
 SH
 
@@ -61,6 +63,11 @@ SH
   cat >"$STUB_BIN/caffeinate" <<'SH'
 #!/bin/bash
 echo "caffeinate $*" >>"$CAFFEINATE_LOG"
+exit 0
+SH
+  cat >"$STUB_BIN/killall" <<'SH'
+#!/bin/bash
+echo "killall $*" >>"$KILLALL_LOG"
 exit 0
 SH
 
@@ -147,48 +154,40 @@ SH
   [[ "$output" == *"Awake for"* ]]
 }
 
-# --- microphone-safe mode ---
+# --- singular lid-close workflow ---
 
-@test "default mode keeps the built-in mic available without sudo or lid bypass" {
+@test "default mode enables lid-close and records the built-in mic for recovery" {
+  stub_mic present
   run "$AWAKE" 1
   [ "$status" -eq 0 ]
-  [[ "$output" == *"built-in mic available"* ]]
+  [[ "$output" == *"lid can be CLOSED"* ]]
+  [[ "$output" == *"Built-in mic returns after reopening"* ]]
   for _ in {1..20}; do
     [[ -f "$CAFFEINATE_LOG" ]] && break
     sleep 0.05
   done
-  grep -q 'caffeinate -imsu -t 3600' "$CAFFEINATE_LOG"
-  [ ! -f "$SUDO_LOG" ]
-  [ ! -f "$AWAKE_STATE_DIR/lid" ]
-  [ "$(cat "$AWAKE_STATE_DIR/mode")" = "mic" ]
-}
-
-@test "mic is an alias for the default mode" {
-  run "$AWAKE" mic 1
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"built-in mic available"* ]]
-  [ ! -f "$SUDO_LOG" ]
-  [ "$(cat "$AWAKE_STATE_DIR/mode")" = "mic" ]
-}
-
-@test "lid mode explicitly requests admin access and enables lid-close operation" {
-  run "$AWAKE" lid 1
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"lid can be CLOSED"* ]]
+  grep -q 'caffeinate -dimsu -t 3600' "$CAFFEINATE_LOG"
   grep -q 'sudo -v' "$SUDO_LOG"
+  grep -q 'awake-lid-guard 3600 1' "$SUDO_LOG"
   [ -f "$AWAKE_STATE_DIR/lid" ]
-  [ ! -f "$AWAKE_STATE_DIR/mode" ]
+  [ -f "$AWAKE_STATE_DIR/mic" ]
 }
 
-@test "status identifies a live microphone-safe session" {
+@test "old mode arguments are rejected so the public workflow stays singular" {
+  run "$AWAKE" mic 1
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"positive number"* ]]
+}
+
+@test "status identifies a live lid-close session" {
   livepid=$$
   printf '%s %s\n' "$livepid" 3600 >"$AWAKE_STATE_DIR/pid"
   echo "$(($(date +%s) + 3600))" >"$AWAKE_STATE_DIR/until"
-  echo mic >"$AWAKE_STATE_DIR/mode"
+  echo 1 >"$AWAKE_STATE_DIR/lid"
 
   run "$AWAKE" status
   [ "$status" -eq 0 ]
-  [[ "$output" == *"lid open; built-in mic available"* ]]
+  [[ "$output" == *"lid can be closed"* ]]
 }
 
 # --- help / version ---
@@ -196,7 +195,7 @@ SH
 @test "--version prints the version and exits 0" {
   run "$AWAKE" --version
   [ "$status" -eq 0 ]
-  [[ "$output" == *"awake 2.0.0"* ]]
+  [[ "$output" == *"awake 3.0.0"* ]]
 }
 
 @test "-h prints help and exits 0" {
@@ -307,6 +306,60 @@ stub_lid() { # stub_lid open|closed
 echo '    |   "AppleClamshellState" = $state'
 SH
   chmod +x "$STUB_BIN/ioreg"
+}
+
+stub_lid_close_then_open() {
+  export LID_SEQUENCE_FILE="$BATS_TEST_TMPDIR/lid_sequence"
+  echo 0 >"$LID_SEQUENCE_FILE"
+  cat >"$STUB_BIN/ioreg" <<'SH'
+#!/bin/bash
+n=$(cat "$LID_SEQUENCE_FILE")
+if [[ "$n" -eq 0 ]]; then
+  echo '    |   "AppleClamshellState" = Yes'
+else
+  echo '    |   "AppleClamshellState" = No'
+fi
+echo $((n + 1)) >"$LID_SEQUENCE_FILE"
+SH
+  chmod +x "$STUB_BIN/ioreg"
+}
+
+stub_guard_clock() {
+  export DATE_SEQUENCE_FILE="$BATS_TEST_TMPDIR/date_sequence"
+  echo 99 >"$DATE_SEQUENCE_FILE"
+  cat >"$STUB_BIN/date" <<'SH'
+#!/bin/bash
+if [[ "$1" == "+%s" ]]; then
+  n=$(cat "$DATE_SEQUENCE_FILE")
+  n=$((n + 1))
+  echo "$n" >"$DATE_SEQUENCE_FILE"
+  echo "$n"
+else
+  /bin/date "$@"
+fi
+SH
+  chmod +x "$STUB_BIN/date"
+}
+
+@test "lid guard restores a missing built-in mic automatically after reopen" {
+  stub_mic absent
+  stub_lid_close_then_open
+  stub_guard_clock
+
+  run env AWAKE_LID_POLL_SECONDS=0 AWAKE_MIC_GRACE_SECONDS=0 "$AWAKE" awake-lid-guard 3 1
+  [ "$status" -eq 0 ]
+  grep -q 'killall coreaudiod' "$KILLALL_LOG"
+  grep -q 'pmset -a disablesleep 1' "$PMSET_LOG"
+  grep -q 'pmset -a disablesleep 0' "$PMSET_LOG"
+}
+
+@test "mic recovery leaves the audio service alone when the mic returns normally" {
+  stub_mic present
+  stub_lid open
+
+  run env AWAKE_MIC_GRACE_SECONDS=0 "$AWAKE" awake-mic-recover 1
+  [ "$status" -eq 0 ]
+  [ ! -f "$KILLALL_LOG" ]
 }
 
 @test "off warns when the built-in mic did not come back" {

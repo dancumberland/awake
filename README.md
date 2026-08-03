@@ -2,7 +2,7 @@
 
 # awake
 
-*Keep your Mac awake with its built-in mic available.*
+*Keep your Mac awake, even with the lid closed.*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![CI](https://github.com/dancumberland/awake/actions/workflows/ci.yml/badge.svg)](https://github.com/dancumberland/awake/actions/workflows/ci.yml)
@@ -15,7 +15,7 @@
 
 ## Why this exists
 
-`caffeinate` is the macOS command for keeping a Mac awake while it sits idle. `awake` wraps it with a timer and survives closing the terminal. The default mode keeps the lid open so the built-in microphone and camera remain available. When you explicitly need lid-closed operation, `awake lid` temporarily changes the system power setting and restores it when the session ends.
+`caffeinate` is the macOS command for keeping a Mac awake while it sits idle. `awake` wraps it with a timer, survives closing the terminal, and keeps the Mac running when you close the lid. It also watches for the lid to reopen and automatically restores the built-in microphone if macOS fails to bring it back.
 
 ![Diagram comparing caffeinate's idle-sleep coverage with awake's added lid-close coverage](assets/lid-close.svg)
 
@@ -41,12 +41,10 @@ curl -fsSL https://raw.githubusercontent.com/dancumberland/awake/master/install.
 
 | Command | What it does |
 | --- | --- |
-| `awake` | Prompt for a mic-safe, lid-open session |
-| `awake 1` | Stay awake for 1 hour with the built-in mic available |
-| `awake .5` | Stay awake for 30 minutes with the built-in mic available |
-| `awake 24` | Stay awake for a full day with the built-in mic available |
-| `awake lid 1` | Stay awake for 1 hour with the lid closed (built-in mic unavailable) |
-| `awake mic 1` | Explicit alias for `awake 1` |
+| `awake` | Prompt for how many hours to stay awake |
+| `awake 1` | Stay awake for 1 hour, including with the lid closed |
+| `awake .5` | Stay awake for 30 minutes, including with the lid closed |
+| `awake 24` | Stay awake for a full day, including with the lid closed |
 | `awake off` | Let the Mac sleep normally again, including on a lid close |
 | `awake status` | Show how much awake-time is left |
 
@@ -54,22 +52,24 @@ curl -fsSL https://raw.githubusercontent.com/dancumberland/awake/master/install.
 
 A session survives closing the terminal. The process is nohup'd and reparents to launchd, so it keeps running until the timer ends or you run `awake off`.
 
-### Built-in microphone by default
+### One workflow
 
-The default `awake [hours]` mode keeps the system awake, lets the built-in display sleep, and needs no administrator password. Keep the lid open and the built-in microphone remains available. `awake mic [hours]` does the same thing as an explicit alias.
+Run `awake`, enter the number of hours, and close the lid when you need to. Awake keeps the Mac running until the timer ends or you run `awake off`.
 
-Use `awake lid [hours]` when you need to shut the lid. macOS disables the built-in microphone and camera in that physical state, so lid-closed sessions require an external microphone.
+macOS physically disables the built-in microphone and camera while the lid is shut. An external microphone can remain available in that state. When you reopen the lid, Awake gives macOS a few seconds to return the built-in mic. If it stays missing, Awake restarts the Mac audio service automatically.
 
 ## What it does with `sudo`, exactly
 
-In explicit `awake lid` mode, Awake changes one systemwide setting that macOS only lets root change. It runs two commands as root, and only these two:
+Awake changes one systemwide setting that macOS only lets root change. It normally runs these two commands as root:
 
 - `pmset -a disablesleep 1` when a session starts, to block clamshell sleep.
 - `pmset -a disablesleep 0` when the session ends or the timer runs out, to restore normal sleep.
 
-That covers the entire use of root. This setting applies to the whole system, so macOS asks for an admin password to change it.
+If the built-in mic fails to return after the lid opens, the same root-owned session guard runs `killall coreaudiod` once. macOS relaunches that audio service automatically.
 
-You can decline the password prompt. `awake lid` falls back to lid-open protection. Nothing fails or crashes, and closing the lid lets the Mac sleep.
+That covers the entire use of root. The sleep setting applies to the whole system, so macOS asks for an admin password when Awake starts.
+
+You can decline the password prompt. `awake` falls back to lid-open protection. Nothing fails or crashes, and closing the lid lets the Mac sleep.
 
 ## Battery
 
@@ -80,9 +80,11 @@ You can decline the password prompt. `awake lid` falls back to lid-open protecti
 
 While the lid is closed, macOS turns off the built-in microphone and the built-in camera. They disappear from the device list in System Settings and in apps like Zoom. This is macOS behavior in clamshell mode, not something `awake` does — `awake` only touches `caffeinate` and `pmset`.
 
-Opening the lid usually brings both devices back. Sometimes the audio daemon doesn't re-register the microphone, and it stays missing. Because that happens right after an `awake` session, it looks like `awake` broke your microphone.
+Opening the lid usually brings both devices back. Sometimes the Mac audio service doesn't re-register the microphone, and it stays missing.
 
-So `awake` checks. When a lid session starts, it records whether this Mac has a built-in microphone. Later, `awake off` and `awake status` tell you if it hasn't come back:
+Awake checks automatically. When a session starts, it records whether the Mac has a built-in microphone. The root-owned lid guard then watches for the lid to reopen, waits briefly, and restarts the audio service only when the built-in mic remains missing.
+
+`awake off` and `awake status` retain a fallback warning if automatic recovery could not run:
 
 ```
 🎙  Your built-in microphone hasn't come back. macOS turns it off while the lid
@@ -92,9 +94,7 @@ So `awake` checks. When a lid session starts, it records whether this Mac has a 
         sudo killall coreaudiod
 ```
 
-The daemon relaunches on its own within a second or two, and the microphone comes back. Any app recording or on a call at that moment loses its audio, so run it between calls.
-
-`awake` prints that command rather than running it. `coreaudiod` is systemwide, and restarting it cuts audio in every open app — not something a sleep utility should do on your behalf. It also stays quiet in the three cases where the message would be wrong: on a Mac with no built-in microphone at all, while the lid is still closed (the microphone is meant to be off then), and when the microphone came back normally.
+The audio service relaunches within a second or two. Restarting it briefly interrupts other Mac audio, so Awake does this only after a detected lid reopen and a failed microphone check. It stays quiet on Macs with no built-in microphone, while the lid remains closed, and when the microphone returns normally.
 
 ## Uninstall
 
