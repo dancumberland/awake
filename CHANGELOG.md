@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [3.1.0] - 2026-10-30
+
+### Added
+- Optional `awake 1 unlock`, `awake unlock 1`, and `awake unlock` mode to pause the idle screen saver for the session without changing password requirements.
+- Interactive duration examples and support for entering `1 unlock` at the prompt.
+- Exact timeout restoration on expiry, off, replacement, or caffeinate exit; independent temporary launchd recovery after a killed guard or reboot, with synchronous recovery on the next invocation as well. User timeout changes are preserved.
+- Idle-lock mode status and visible startup/recovery failures.
+
 ## [3.0.0] - 2026-08-03
 
 ### Changed

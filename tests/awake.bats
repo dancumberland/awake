@@ -25,6 +25,11 @@ setup() {
   export SUDO_LOG="$BATS_TEST_TMPDIR/sudo.log"
   export CAFFEINATE_LOG="$BATS_TEST_TMPDIR/caffeinate.log"
   export KILLALL_LOG="$BATS_TEST_TMPDIR/killall.log"
+  export SAVER_STATE_FILE="$BATS_TEST_TMPDIR/saver_state"
+  export AWAKE_LAUNCH_AGENTS_DIR="$BATS_TEST_TMPDIR/LaunchAgents"
+  export LAUNCHCTL_LOG="$BATS_TEST_TMPDIR/launchctl.log"
+  export DEFAULTS_LOG="$BATS_TEST_TMPDIR/defaults.log"
+  echo 300 >"$SAVER_STATE_FILE"
   echo 0 >"$PMSET_STATE_FILE" # default: sleep NOT disabled
 
   # fake pmset — reads/writes PMSET_STATE_FILE only, never the real host.
@@ -40,6 +45,25 @@ if [[ "$1" == "-a" && "$2" == "disablesleep" ]]; then
   exit 0
 fi
 exit 0
+SH
+
+  # fake defaults — unlock tests never change the host's preferences.
+  cat >"$STUB_BIN/defaults" <<'SH'
+#!/bin/bash
+echo "defaults $*" >>"$DEFAULTS_LOG"
+[[ "$1" == "-currentHost" && "$3" == "com.apple.screensaver" && "$4" == "idleTime" ]] || exit 9
+case "$2" in
+read) [[ -f "$SAVER_STATE_FILE" ]] || exit 1; cat "$SAVER_STATE_FILE" ;;
+write) [[ "${FAIL_SAVER_WRITE:-0}" == 0 ]] || exit 1; echo "$6" >"$SAVER_STATE_FILE" ;;
+delete) rm -f "$SAVER_STATE_FILE" ;;
+*) exit 9 ;;
+esac
+SH
+
+  cat >"$STUB_BIN/launchctl" <<'SH'
+#!/bin/bash
+echo "launchctl $*" >>"$LAUNCHCTL_LOG"
+[[ "${FAIL_RECOVERY:-0}" == 0 ]]
 SH
 
   # fake sudo — logs the call, then runs the remaining command under the stub
@@ -63,6 +87,7 @@ SH
   cat >"$STUB_BIN/caffeinate" <<'SH'
 #!/bin/bash
 echo "caffeinate $*" >>"$CAFFEINATE_LOG"
+if [[ "${KEEP_CAFFEINATE:-0}" == 1 ]]; then exec sleep 60; fi
 exit 0
 SH
   cat >"$STUB_BIN/killall" <<'SH'
@@ -195,7 +220,7 @@ SH
 @test "--version prints the version and exits 0" {
   run "$AWAKE" --version
   [ "$status" -eq 0 ]
-  [[ "$output" == *"awake 3.0.0"* ]]
+  [[ "$output" == *"awake 3.1.0"* ]]
 }
 
 @test "-h prints help and exits 0" {
@@ -419,4 +444,183 @@ SH
   [[ "$output" == *"sudo killall coreaudiod"* ]]
   # status is read-only: the marker survives so a later `off` still reports it
   [ -f "$AWAKE_STATE_DIR/mic" ]
+}
+
+
+# --- timed idle-lock prevention ---
+
+teardown() {
+  # All recorded workers belong to this test, with isolated state and PATH.
+  if [[ -f "$AWAKE_STATE_DIR/unlock/pid" ]]; then
+    kill -TERM "$(cat "$AWAKE_STATE_DIR/unlock/pid")" 2>/dev/null || true
+  fi
+  if [[ -f "$AWAKE_STATE_DIR/pid" ]]; then
+    read -r p _ <"$AWAKE_STATE_DIR/pid"
+    if [[ "$(ps -p "$p" -o command= 2>/dev/null)" == "sleep 60" ]]; then
+      kill "$p" 2>/dev/null || true
+    fi
+  fi
+}
+
+@test "unlock pauses the screen saver and off restores the original timeout" {
+  export KEEP_CAFFEINATE=1
+  stub_mic absent
+  run "$AWAKE" 1 unlock
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Idle-lock prevention is on"* ]]
+  [ "$(cat "$SAVER_STATE_FILE")" = 0 ]
+  run "$AWAKE" status
+  [[ "$output" == *"Idle-lock prevention is active"* ]]
+  run "$AWAKE" off
+  [ "$status" -eq 0 ]
+  [ "$(cat "$SAVER_STATE_FILE")" = 300 ]
+  [ ! -d "$AWAKE_STATE_DIR/unlock" ]
+  ! grep -q 'askForPassword' "$DEFAULTS_LOG"
+}
+
+@test "interactive prompt explains hours and accepts 1 unlock" {
+  export KEEP_CAFFEINATE=1
+  stub_mic absent
+  run bash -c 'printf "1 unlock\n" | "$1"' _ "$AWAKE"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *".5 = 30 minutes"* ]]
+  [[ "$output" == *"1 unlock"* ]]
+  [ "$(cat "$SAVER_STATE_FILE")" = 0 ]
+  run "$AWAKE" off
+  [ "$status" -eq 0 ]
+}
+
+@test "awake unlock prompts for hours" {
+  export KEEP_CAFFEINATE=1
+  stub_mic absent
+  run bash -c 'printf ".5\n" | "$1" unlock' _ "$AWAKE"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Idle-lock prevention is on"* ]]
+  run "$AWAKE" off
+  [ "$status" -eq 0 ]
+}
+
+@test "normal awake does not change screen-saver preferences" {
+  stub_mic absent
+  run "$AWAKE" 1
+  [ "$status" -eq 0 ]
+  [ ! -f "$DEFAULTS_LOG" ]
+}
+
+@test "replacing unlock mode with normal mode restores the timeout first" {
+  export KEEP_CAFFEINATE=1
+  stub_mic absent
+  run "$AWAKE" 1 unlock
+  [ "$status" -eq 0 ]
+  run "$AWAKE" 1
+  [ "$status" -eq 0 ]
+  [ "$(cat "$SAVER_STATE_FILE")" = 300 ]
+}
+
+@test "guard restores an absent screen-saver key when the timer expires" {
+  rm -f "$SAVER_STATE_FILE"
+  mkdir "$AWAKE_STATE_DIR/unlock"
+  echo absent >"$AWAKE_STATE_DIR/unlock/original"
+  touch "$AWAKE_STATE_DIR/unlock/supervised"
+  run "$AWAKE" awake-unlock-guard "$(date +%s)" "$$"
+  [ "$status" -eq 0 ]
+  [ ! -f "$SAVER_STATE_FILE" ]
+  [ -f "$AWAKE_STATE_DIR/unlock/restored" ]
+}
+
+@test "guard restores settings if the caffeinate worker crashes" {
+  mkdir "$AWAKE_STATE_DIR/unlock"
+  echo 600 >"$AWAKE_STATE_DIR/unlock/original"
+  touch "$AWAKE_STATE_DIR/unlock/supervised"
+  deadpid=$(bash -c 'echo $$')
+  run "$AWAKE" awake-unlock-guard "$(($(date +%s) + 60))" "$deadpid"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$SAVER_STATE_FILE")" = 600 ]
+}
+
+@test "off recovers a killed guard without its exit trap" {
+  mkdir "$AWAKE_STATE_DIR/unlock"
+  echo 300 >"$AWAKE_STATE_DIR/unlock/original"
+  echo 99999999 >"$AWAKE_STATE_DIR/unlock/pid"
+  echo 0 >"$SAVER_STATE_FILE"
+  run "$AWAKE" off
+  [ "$status" -eq 0 ]
+  [ "$(cat "$SAVER_STATE_FILE")" = 300 ]
+}
+
+@test "recovery preserves a user timeout change made during the session" {
+  mkdir "$AWAKE_STATE_DIR/unlock"
+  echo 300 >"$AWAKE_STATE_DIR/unlock/original"
+  echo 900 >"$SAVER_STATE_FILE"
+  run "$AWAKE" off
+  [ "$status" -eq 0 ]
+  [ "$(cat "$SAVER_STATE_FILE")" = 900 ]
+}
+
+@test "unlock fails visibly if macOS refuses its preference write" {
+  export KEEP_CAFFEINATE=1 FAIL_SAVER_WRITE=1
+  stub_mic absent
+  run "$AWAKE" 1 unlock
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"idle-lock prevention could not start"* ]]
+  [ "$(cat "$SAVER_STATE_FILE")" = 300 ]
+}
+
+@test "invalid extra arguments cannot enable unlock or stop the current session" {
+  run "$AWAKE" 1 unlock extra
+  [ "$status" -ne 0 ]
+  [ ! -f "$DEFAULTS_LOG" ]
+  [ ! -f "$SUDO_LOG" ]
+}
+
+
+@test "empty interactive input is rejected without changing preferences" {
+  run bash -c 'printf "\n" | "$1"' _ "$AWAKE"
+  [ "$status" -ne 0 ]
+  [ ! -f "$DEFAULTS_LOG" ]
+  [ ! -f "$SUDO_LOG" ]
+}
+
+@test "off refuses trailing arguments" {
+  run "$AWAKE" off unlock
+  [ "$status" -ne 0 ]
+  [ ! -f "$SUDO_LOG" ]
+}
+
+@test "restoration failure retains recovery state and off retries successfully" {
+  mkdir "$AWAKE_STATE_DIR/unlock"
+  echo 300 >"$AWAKE_STATE_DIR/unlock/original"
+  echo 0 >"$SAVER_STATE_FILE"
+  export FAIL_SAVER_WRITE=1
+  run "$AWAKE" off
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"could not restore"* ]]
+  [ -f "$AWAKE_STATE_DIR/unlock/original" ]
+  export FAIL_SAVER_WRITE=0
+  run "$AWAKE" off
+  [ "$status" -eq 0 ]
+  [ "$(cat "$SAVER_STATE_FILE")" = 300 ]
+  [ ! -d "$AWAKE_STATE_DIR/unlock" ]
+}
+
+
+@test "unlock refuses to change preferences without independent recovery" {
+  export KEEP_CAFFEINATE=1 FAIL_RECOVERY=1
+  stub_mic absent
+  run "$AWAKE" 1 unlock
+  [ "$status" -ne 0 ]
+  [ "$(cat "$SAVER_STATE_FILE")" = 300 ]
+  ! grep -q 'write com.apple.screensaver idleTime -int 0' "$DEFAULTS_LOG"
+}
+
+@test "independent recovery restores a dead guard and removes its job" {
+  mkdir "$AWAKE_STATE_DIR/unlock"
+  echo 300 >"$AWAKE_STATE_DIR/unlock/original"
+  echo 99999999 >"$AWAKE_STATE_DIR/unlock/pid"
+  echo 0 >"$SAVER_STATE_FILE"
+  run "$AWAKE" awake-unlock-recovery
+  [ "$status" -eq 0 ]
+  [ "$(cat "$SAVER_STATE_FILE")" = 300 ]
+  [ ! -d "$AWAKE_STATE_DIR/unlock" ]
+  grep -q 'bootout' "$LAUNCHCTL_LOG"
 }

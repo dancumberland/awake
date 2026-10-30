@@ -42,6 +42,8 @@ curl -fsSL https://raw.githubusercontent.com/dancumberland/awake/master/install.
 | Command | What it does |
 | --- | --- |
 | `awake` | Prompt for how many hours to stay awake |
+| `awake 1 unlock` | Stay awake and pause idle locking for 1 hour (keep the lid open) |
+| `awake unlock` | Prompt for hours with idle-lock prevention selected |
 | `awake 1` | Stay awake for 1 hour, including with the lid closed |
 | `awake .5` | Stay awake for 30 minutes, including with the lid closed |
 | `awake 24` | Stay awake for a full day, including with the lid closed |
@@ -52,7 +54,17 @@ curl -fsSL https://raw.githubusercontent.com/dancumberland/awake/master/install.
 
 A session survives closing the terminal. The process is nohup'd and reparents to launchd, so it keeps running until the timer ends or you run `awake off`.
 
-### One workflow
+### Optional idle-lock prevention
+
+Run `awake 1 unlock`, or type `1 unlock` when plain `awake` asks for a duration. `awake unlock 1` also works. The prompt shows common durations: `.5` for 30 minutes, `1` for an hour, `2`, `8`, and `24`.
+
+Unlock mode temporarily sets the current host’s screen-saver idle timeout to zero. A detached guard restores the exact previous timeout (or removes the override if it was originally absent) when time expires, `awake off` runs, another session replaces it, or its caffeinate worker exits. It preserves a different timeout you set yourself during the session. Password requirements are never changed.
+
+Start with the Mac unlocked and keep the lid open for GUI agents. This mode prevents ordinary idle locking; it does not enter passwords, undo a manual lock, prevent lid-close locks, or override managed security policies. Your screen remains accessible while the mode is active.
+
+A temporary per-user LaunchAgent independently checks for an ended or crashed unlock guard every five seconds and after login. It restores the saved timeout after a forcibly killed guard or reboot, retries restoration errors, and removes its job when cleanup succeeds. macOS may delay its dispatch; it cannot run while the Mac is off or before login. Unlock mode refuses to start unless this recovery job is registered. `awake status` and `awake off` also provide immediate recovery. Recovery receipts are kept in `~/.cache/awake/unlock-recovery.log`.
+
+### Lid-close workflow
 
 Run `awake`, enter the number of hours, and close the lid when you need to. Awake keeps the Mac running until the timer ends or you run `awake off`.
 
@@ -78,7 +90,7 @@ You can decline the password prompt. `awake` falls back to lid-open protection. 
 
 ## Built-in microphone and camera
 
-While the lid is closed, macOS turns off the built-in microphone and the built-in camera. They disappear from the device list in System Settings and in apps like Zoom. This is macOS behavior in clamshell mode, not something `awake` does — `awake` only touches `caffeinate` and `pmset`.
+While the lid is closed, macOS turns off the built-in microphone and the built-in camera. They disappear from the device list in System Settings and in apps like Zoom. This is macOS behavior in clamshell mode, not something `awake` does — `awake` uses `caffeinate` and `pmset` for sleep prevention. Optional unlock mode also temporarily changes the screen-saver idle timeout.
 
 Opening the lid usually brings both devices back. Sometimes the Mac audio service doesn't re-register the microphone, and it stays missing.
 

@@ -2,6 +2,8 @@
 # awake — keep this Mac awake for N hours, even with the lid closed.
 #
 #   awake            prompt for hours
+#   awake 1 unlock   stay awake and prevent idle locking for 1 hour
+#   awake unlock     prompt for hours with idle-lock prevention
 #   awake 1          stay awake 1 hour
 #   awake .5         stay awake 30 minutes
 #   awake 24         stay awake a full day
@@ -23,14 +25,18 @@
 
 set -euo pipefail
 
-VERSION="3.0.0"
+VERSION="3.1.0"
 
 STATE="${AWAKE_STATE_DIR:-$HOME/.cache/awake}"
 PIDFILE="$STATE/pid"
 UNTILFILE="$STATE/until"
 LIDFILE="$STATE/lid"
 MICFILE="$STATE/mic"
+UNLOCKDIR="$STATE/unlock"
 SCRIPT_PATH="${BASH_SOURCE[0]}"
+RECOVERY_LABEL="com.dancumberland.awake.unlock.$(printf %s "$STATE" | cksum | awk '{print $1}')"
+RECOVERY_DOMAIN="gui/$(id -u)"
+RECOVERY_PLIST="${AWAKE_LAUNCH_AGENTS_DIR:-$HOME/Library/LaunchAgents}/$RECOVERY_LABEL.plist"
 
 die() {
   echo "awake: $*" >&2
@@ -48,6 +54,8 @@ usage() {
 awake — keep this Mac awake for N hours, even with the lid closed.
 
   awake            prompt for hours
+  awake 1 unlock   stay awake and prevent idle locking for 1 hour
+  awake unlock     prompt for hours with idle-lock prevention
   awake 1          stay awake 1 hour
   awake .5         stay awake 30 minutes
   awake 24         stay awake a full day
@@ -60,6 +68,12 @@ Keeps the display + system awake and disables lid-close (clamshell) sleep, so
 you can shut the lid and keep running. Needs your Mac password once per session.
 Survives closing the terminal; does NOT survive a reboot.
 
+Unlock is optional: enter "1 unlock" at the prompt, or run "awake 1 unlock".
+It temporarily pauses the automatic screen saver and restores its previous
+timeout on expiry, replacement, or awake off. Your password settings stay intact.
+Start unlocked and keep the lid open for GUI agents. Manual locks, lid-close
+locks, and managed security policies are not bypassed.
+
 Heads up: with the lid closed on battery, the Mac runs full-power with the
 screen off — it WILL drain the battery. Plug in for long sessions.
 
@@ -71,6 +85,185 @@ EOF
 }
 
 clock() { date -r "$1" '+%-I:%M %p'; } # epoch seconds -> "4:57 PM"
+
+# Unlock mode pauses only the idle screen saver, never the password check.
+# Save the exact host-specific timeout (including an absent key) before changing
+# it. The detached guard restores it on timeout, loss of caffeinate, or TERM.
+# An independent launchd job recovers a killed guard or reboot automatically.
+# Status/off/start retain synchronous recovery if launchd is unavailable.
+acquire_command_lock() {
+  local attempts="${1:-50}" attempt
+  for ((attempt = 0; attempt < attempts; attempt++)); do
+    if shlock -f "$STATE/command.lock" -p "$$"; then
+      trap 'rm -f "$STATE/command.lock"' EXIT
+      return 0
+    fi
+    sleep 0.1
+  done
+  return 1
+}
+
+read_saver_timeout() {
+  defaults -currentHost read com.apple.screensaver idleTime 2>/dev/null
+}
+
+restore_unlock() {
+  [[ -f "$UNLOCKDIR/original" ]] || return 0
+  [[ ! -f "$UNLOCKDIR/restored" ]] || return 0
+  local original current
+  original=$(cat "$UNLOCKDIR/original")
+  current=$(read_saver_timeout || true)
+  # Preserve an intentional change the user made during the session.
+  if [[ "$current" == "0" ]]; then
+    if [[ "$original" == "absent" ]]; then
+      defaults -currentHost delete com.apple.screensaver idleTime || return 1
+    elif [[ "$original" =~ ^[0-9]+$ ]]; then
+      defaults -currentHost write com.apple.screensaver idleTime -int "$original" || return 1
+    else
+      return 1
+    fi
+    current=$(read_saver_timeout || true)
+    if [[ "$original" == "absent" ]]; then
+      [[ -z "$current" ]] || return 1
+    else
+      [[ "$current" == "$original" ]] || return 1
+    fi
+  fi
+  touch "$UNLOCKDIR/restored"
+}
+
+unlock_guard_running() {
+  local p
+  [[ -f "$UNLOCKDIR/pid" ]] || return 1
+  p=$(cat "$UNLOCKDIR/pid")
+  [[ "$p" =~ ^[0-9]+$ ]] || return 1
+  kill -0 "$p" 2>/dev/null || return 1
+  # Do not signal a reused PID belonging to another process.
+  [[ "$(ps -p "$p" -o command= 2>/dev/null)" == *"awake-unlock-guard"* ]]
+}
+
+xml_text() {
+  printf %s "$1" | sed 's/\&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g'
+}
+
+remove_unlock_recovery() {
+  # Unlink first: bootout can terminate this very process on a recovery run.
+  rm -f "$RECOVERY_PLIST"
+  launchctl bootout "$RECOVERY_DOMAIN/$RECOVERY_LABEL" >/dev/null 2>&1 || true
+}
+
+install_unlock_recovery() {
+  local recovery_dir
+  recovery_dir=$(dirname "$RECOVERY_PLIST")
+  mkdir -p "$recovery_dir" || return 1
+  cat >"$RECOVERY_PLIST" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>Label</key><string>$RECOVERY_LABEL</string>
+<key>ProgramArguments</key><array><string>/bin/bash</string><string>$(xml_text "$SCRIPT_PATH")</string><string>awake-unlock-recovery</string></array>
+<key>EnvironmentVariables</key><dict><key>AWAKE_STATE_DIR</key><string>$(xml_text "$STATE")</string><key>AWAKE_LAUNCH_AGENTS_DIR</key><string>$(xml_text "$recovery_dir")</string></dict>
+<key>RunAtLoad</key><true/>
+<key>StartInterval</key><integer>5</integer>
+<key>StandardOutPath</key><string>$(xml_text "$STATE/unlock-recovery.log")</string>
+<key>StandardErrorPath</key><string>$(xml_text "$STATE/unlock-recovery.log")</string>
+</dict></plist>
+EOF
+  launchctl bootstrap "$RECOVERY_DOMAIN" "$RECOVERY_PLIST" || return 1
+  launchctl print "$RECOVERY_DOMAIN/$RECOVERY_LABEL" >/dev/null 2>&1
+}
+
+run_unlock_recovery() {
+  acquire_command_lock 1 || return 0
+  if [[ ! -f "$UNLOCKDIR/original" ]]; then
+    remove_unlock_recovery
+    return 0
+  fi
+  # The guard waits until this job is registered before touching preferences.
+  if unlock_guard_running && session_active; then
+    return 0
+  fi
+  echo "$(date '+%Y-%m-%dT%H:%M:%S%z') Recovering ended or failed unlock session."
+  stop_unlock
+}
+
+stop_unlock() {
+  if [[ ! -d "$UNLOCKDIR" ]]; then
+    [[ ! -f "$RECOVERY_PLIST" ]] || remove_unlock_recovery
+    return 0
+  fi
+  local p attempt
+  if unlock_guard_running; then
+    p=$(cat "$UNLOCKDIR/pid")
+    kill -TERM "$p" 2>/dev/null || true
+    for ((attempt = 0; attempt < 40; attempt++)); do
+      unlock_guard_running || break
+      sleep 0.1
+    done
+    if unlock_guard_running; then
+      echo "awake: unlock guard did not stop; screen-saver recovery is pending. Run awake off again." >&2
+      return 1
+    fi
+  fi
+  restore_unlock || {
+    echo "awake: could not restore the screen-saver timeout. Recovery state retained; run awake off again." >&2
+    return 1
+  }
+  rm -f "$UNLOCKDIR/ready" "$UNLOCKDIR/restored" "$UNLOCKDIR/pid" "$UNLOCKDIR/original" "$UNLOCKDIR/supervised"
+  rmdir "$UNLOCKDIR"
+  remove_unlock_recovery
+}
+
+run_unlock_guard() {
+  local deadline="$1" caffeine_pid="$2" attempt
+  trap 'restore_unlock || echo "awake: screen-saver restoration failed; run awake off." >&2' EXIT
+  trap 'exit 0' TERM INT HUP
+  echo "$$" >"$UNLOCKDIR/pid"
+  for ((attempt = 0; attempt < 50; attempt++)); do
+    [[ ! -f "$UNLOCKDIR/supervised" ]] || break
+    sleep 0.1
+  done
+  [[ -f "$UNLOCKDIR/supervised" ]] || exit 1
+  defaults -currentHost write com.apple.screensaver idleTime -int 0
+  [[ "$(read_saver_timeout)" == "0" ]] || exit 1
+  touch "$UNLOCKDIR/ready"
+  while (($(date +%s) < deadline)) && kill -0 "$caffeine_pid" 2>/dev/null; do
+    sleep 1
+  done
+}
+
+start_unlock() {
+  local original caffeine_pid guard_pid attempt
+  mkdir "$UNLOCKDIR" || return 1
+  if original=$(read_saver_timeout); then
+    if ! [[ "$original" =~ ^[0-9]+$ ]]; then
+      echo "awake: unexpected screen-saver timeout; unlock was not enabled." >&2
+      rmdir "$UNLOCKDIR"
+      return 1
+    fi
+  else
+    # An absent preference is valid; its effective default belongs to macOS.
+    original=absent
+  fi
+  printf '%s\n' "$original" >"$UNLOCKDIR/original" || return 1
+  read -r caffeine_pid _ <"$PIDFILE" || return 1
+  nohup "$SCRIPT_PATH" awake-unlock-guard "$(cat "$UNTILFILE")" "$caffeine_pid" >>"$STATE/unlock.log" 2>&1 &
+  guard_pid=$!
+  echo "$guard_pid" >"$UNLOCKDIR/pid" || return 1
+  if ! install_unlock_recovery; then
+    stop_unlock || true
+    return 1
+  fi
+  touch "$UNLOCKDIR/supervised" || return 1
+  for ((attempt = 0; attempt < 40; attempt++)); do
+    if [[ -f "$UNLOCKDIR/ready" ]] && unlock_guard_running; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  stop_unlock || return 1
+  return 1
+}
 
 # True only when the caffeinate we recorded is still running AND its timer
 # hasn't passed — i.e. a genuine, live awake session (not a ghost from a
@@ -233,6 +426,14 @@ restore_lid_if_needed() {
 }
 
 case "${1:-}" in
+awake-unlock-recovery)
+  run_unlock_recovery
+  exit 0
+  ;;
+awake-unlock-guard)
+  run_unlock_guard "${2:?missing deadline}" "${3:?missing caffeinate PID}"
+  exit 0
+  ;;
 awake-lid-guard)
   run_lid_guard "${2:?missing guard duration}" "${3:-0}"
   exit 0
@@ -243,12 +444,14 @@ awake-mic-recover)
   ;;
 esac
 
-cleanup_stale
-
 cmd="${1:-}"
 
 case "$cmd" in
 off | stop | none | 0)
+  [[ $# -eq 1 ]] || die "usage: awake off"
+  acquire_command_lock || die "another awake command is still running; try again shortly."
+  cleanup_stale
+  stop_unlock || exit 1
   stop_caffeinate
   restore_lid_if_needed
   echo "☕️→😴  Caffeine off. Your Mac can sleep normally now."
@@ -257,6 +460,12 @@ off | stop | none | 0)
   exit 0
   ;;
 status | st)
+  [[ $# -eq 1 ]] || die "usage: awake status"
+  acquire_command_lock || die "another awake command is still running; try again shortly."
+  cleanup_stale
+  if [[ -d "$UNLOCKDIR" ]] && ! unlock_guard_running; then
+    stop_unlock || exit 1
+  fi
   if session_active; then
     now=$(date +%s)
     until_epoch=$(cat "$UNTILFILE")
@@ -276,6 +485,9 @@ status | st)
   if sleep_disabled_now && ! session_active; then
     echo "⚠️  Sleep is disabled system-wide but no awake session is tracked — run  awake off  to restore normal sleep." >&2
   fi
+  if [[ -f "$UNLOCKDIR/ready" ]] && unlock_guard_running && [[ "$(read_saver_timeout || true)" == "0" ]]; then
+    echo "🔓  Idle-lock prevention is active; password settings are unchanged."
+  fi
   report_missing_mic
   exit 0
   ;;
@@ -290,9 +502,32 @@ status | st)
 esac
 
 # --- start a new awake session ---
-hours="$cmd"
+# Accept hours + unlock in either order, including a single interactive line.
+unlock=0
+hours=""
+parse_start_args() {
+  local arg
+  for arg in "$@"; do
+    case "$arg" in
+    unlock)
+      ((unlock == 0)) || die "use unlock only once."
+      unlock=1
+      ;;
+    *)
+      [[ -z "$hours" ]] || die "please give one positive number of hours, optionally followed by unlock (e.g. awake 1 unlock)."
+      hours="$arg"
+      ;;
+    esac
+  done
+}
+parse_start_args "$@"
 if [[ -z "$hours" ]]; then
-  read -rp "Keep Mac awake for how many hours? (.5=30min · 1=1hr · 24=day): " hours || true
+  echo 'Hours: .5 = 30 minutes · 1 = 1 hour · 2 = 2 hours · 8 = workday · 24 = day'
+  if ((unlock == 0)); then
+    echo 'Add unlock to prevent idle locking too, e.g. 1 unlock (keep the lid open).'
+  fi
+  read -rp "Keep Mac awake for how long? " -a answer || true
+  parse_start_args "${answer[@]}"
 fi
 
 # Validate BEFORE any arithmetic. The regex gate guarantees $hours is a plain
@@ -315,6 +550,9 @@ else
   echo "    No password given — starting idle-only (closing the lid will still sleep)."
 fi
 
+acquire_command_lock || die "another awake command is still running; try again shortly."
+cleanup_stale
+stop_unlock || exit 1
 stop_caffeinate # replace any caffeinate we already started
 
 # Tear down any guard left over from an earlier session. Live-state-checked
@@ -347,6 +585,15 @@ if ((lid_ok == 1)); then
   echo "$(($(date +%s) + seconds))" >"$LIDFILE"
 fi
 
+if ((unlock == 1)); then
+  if ! start_unlock; then
+    stop_unlock || true
+    stop_caffeinate
+    restore_lid_if_needed
+    die "idle-lock prevention could not start; the session was stopped. See $STATE/unlock.log."
+  fi
+fi
+
 h=$((seconds / 3600))
 m=$(((seconds % 3600) / 60))
 dur=""
@@ -360,5 +607,9 @@ if ((lid_ok == 1)); then
   echo "    Runs full-power with the screen off — plug in for long sessions."
 else
   printf "☕️  Mac will stay awake for %s (until %s) — idle only.\n" "$dur" "$(clock "$(cat "$UNTILFILE")")"
+fi
+if ((unlock == 1)); then
+  echo "🔓  Idle-lock prevention is on for this session; previous timeout restores automatically."
+  echo "    Start unlocked and keep the lid open for GUI agents. Manual locks still work."
 fi
 echo "    Close this terminal freely. Stop early (and restore sleep) with:  awake off"
