@@ -15,10 +15,10 @@ jobs:
         run: brew install shellcheck shfmt bats-core
 
       - name: shellcheck
-        run: shellcheck bin/awake
+        run: shellcheck bin/awake libexec/awake-lid-helper scripts/setup-lid-helper.sh install.sh
 
       - name: shfmt (fail if unformatted)
-        run: shfmt -i 2 -d bin/awake
+        run: shfmt -i 2 -d bin/awake libexec/awake-lid-helper scripts/setup-lid-helper.sh install.sh
 
       - name: bats
-        run: bats tests/awake.bats
+        run: bats tests/
