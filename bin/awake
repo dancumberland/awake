@@ -70,14 +70,15 @@ awake — keep this Mac awake for N hours; optional lid-close support.
 Normal awake and unlock sessions need no admin password. Keep the lid open,
 or use macOS closed-display mode with an external display, power, and input
 devices. Add lid for laptop-only lid-sleep suppression; that option needs admin
-access and does not guarantee an unlocked, usable GUI with the lid closed.
+access. Combine unlock lid for closed-lid GUI work; verify on your Mac.
 Survives closing the terminal; does NOT survive a reboot.
 
 Unlock is optional: enter "1 unlock" at the prompt, or run "awake 1 unlock".
 It temporarily pauses the automatic screen saver and restores its previous
 timeout on expiry, replacement, or awake off. Your password settings stay intact.
-Start unlocked and keep the lid open for GUI agents. Manual locks, lid-close
-locks, and managed security policies are not bypassed.
+Start unlocked. Laptop-only closed-lid GUI control and screenshots passed one
+short physical test with unlock lid; behavior can vary across Macs and apps.
+Manual locks and managed security policies are not bypassed.
 
 Heads up: with the lid closed on battery, the Mac runs full-power with the
 screen off — it WILL drain the battery. Plug in for long sessions.
@@ -629,6 +630,10 @@ else
 fi
 if ((unlock == 1)); then
   echo "🔓  Idle-lock prevention is on for this session; previous timeout restores automatically."
-  echo "    Start unlocked and keep the lid open for GUI agents. Manual locks still work."
+  if ((lid_ok == 1)); then
+    echo "    Start unlocked; verify closed-lid GUI access on your Mac. Manual locks still work."
+  else
+    echo "    Start unlocked and keep the lid open for GUI agents. Manual locks still work."
+  fi
 fi
 echo "    Close this terminal freely. Stop early (and restore sleep) with:  awake off"

@@ -17,7 +17,9 @@
 
 `caffeinate` is the macOS command for keeping a Mac awake while it sits idle. `awake` wraps it with a timer, survives closing the terminal, and can optionally keep the Mac running when you close the lid. It also watches for the lid to reopen and automatically restores the built-in microphone if macOS fails to bring it back.
 
-![Diagram comparing caffeinate's idle-sleep coverage with awake's added lid-close coverage](assets/lid-close.svg)
+![Diagram comparing caffeinate with awake in explicit lid mode](assets/lid-close.svg)
+
+The lid-close behavior shown above requires the `lid` option, such as `awake 1 lid` or `awake 1 unlock lid`.
 
 ## Install
 
@@ -31,11 +33,31 @@ brew install awake
 
 (Recent Homebrew requires trusting a tap before it will load formulae from it — that's the `brew trust` line, not an optional step.)
 
+For an existing Homebrew installation:
+
+```sh
+brew update
+brew upgrade awake
+```
+
 Or run the install script, which drops a single file into `/usr/local/bin`:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/dancumberland/awake/master/install.sh | bash
 ```
+
+## Quick start
+
+```sh
+awake 1             # Keep the Mac awake for 1 hour; no password
+awake 1 unlock      # Also prevent idle locking; no password, lid open
+awake 1 unlock lid  # Also suppress lid sleep; admin password required
+awake off           # Stop early and restore normal behavior
+```
+
+Plain `awake` lists common durations and accepts inputs such as `1 unlock` or `1 unlock lid`. `.5` means 30 minutes; `2`, `8`, and `24` mean hours.
+
+Upgrading from v3: plain `awake` no longer suppresses lid sleep. Add `lid` to preserve that behavior. After installing this release, `awake --version` should print `awake 4.0.0`.
 
 ## Usage
 
@@ -58,11 +80,11 @@ A session survives closing the terminal. The process is nohup'd and reparents to
 
 ### Optional idle-lock prevention
 
-Run `awake 1 unlock`, or type `1 unlock` when plain `awake` asks for a duration. `awake unlock 1` also works. The prompt shows common durations: `.5` for 30 minutes, `1` for an hour, `2`, `8`, and `24`.
+Run `awake 1 unlock`, or type `1 unlock` when plain `awake` asks for a duration. For laptop-only closed-lid GUI work, add `lid`: `awake 1 unlock lid`. `awake unlock 1` also works. The prompt shows common durations: `.5` for 30 minutes, `1` for an hour, `2`, `8`, and `24`.
 
 Unlock mode temporarily sets the current host’s screen-saver idle timeout to zero. A detached guard restores the exact previous timeout (or removes the override if it was originally absent) when time expires, `awake off` runs, another session replaces it, or its caffeinate worker exits. It preserves a different timeout you set yourself during the session. Password requirements are never changed.
 
-Start with the Mac unlocked and keep the lid open for GUI agents. This mode prevents ordinary idle locking; it does not enter passwords, undo a manual lock, prevent lid-close locks, or override managed security policies. Your screen remains accessible while the mode is active.
+Start with the Mac unlocked. The password-free `unlock` mode leaves lid sleep under macOS control; keep the lid open unless using closed-display mode with an external display. For the laptop alone, combine `unlock lid` as described below. Unlock prevents ordinary idle locking; it does not enter passwords, undo a manual lock, or override managed security policies. Your screen remains accessible while the mode is active.
 
 A temporary per-user LaunchAgent independently checks for an ended or crashed unlock guard every five seconds and after login. It restores the saved timeout after a forcibly killed guard or reboot, retries restoration errors, and removes its job when cleanup succeeds. macOS may delay its dispatch; it cannot run while the Mac is off or before login. Unlock mode refuses to start unless this recovery job is registered. `awake status` and `awake off` also provide immediate recovery. Recovery receipts are kept in `~/.cache/awake/unlock-recovery.log`.
 
@@ -100,7 +122,7 @@ While the lid is closed, macOS turns off the built-in microphone and the built-i
 
 Opening the lid usually brings both devices back. Sometimes the Mac audio service doesn't re-register the microphone, and it stays missing.
 
-Awake checks automatically. When a session starts, it records whether the Mac has a built-in microphone. The root-owned lid guard then watches for the lid to reopen, waits briefly, and restarts the audio service only when the built-in mic remains missing.
+In explicit `lid` mode, Awake checks automatically. When that session starts, it records whether the Mac has a built-in microphone. The root-owned lid guard then watches for the lid to reopen, waits briefly, and restarts the audio service only when the built-in mic remains missing.
 
 `awake off` and `awake status` retain a fallback warning if automatic recovery could not run:
 
@@ -128,7 +150,7 @@ If you used the install script, remove the file:
 rm -f /usr/local/bin/awake
 ```
 
-If a session is active, run `awake off` first to restore normal sleep. Once a session ends, `awake` leaves nothing running.
+If a session is active, run `awake off` first to restore normal sleep and the screen-saver timeout before uninstalling. The recovery LaunchAgent removes itself after successful cleanup. If restoration fails, keep Awake installed until `awake off` succeeds.
 
 ---
 
