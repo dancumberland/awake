@@ -45,7 +45,7 @@ curl -fsSL https://raw.githubusercontent.com/dancumberland/awake/master/install.
 | `awake 1 unlock` | Stay awake and pause idle locking for 1 hour (keep the lid open) |
 | `awake unlock` | Prompt for hours with idle-lock prevention selected |
 | `awake 1` | Stay awake for 1 hour, no admin password |
-| `awake 1 lid` | Also suppress lid-close sleep (admin password required; unlocked GUI unverified) |
+| `awake 1 lid` | Also suppress lid-close sleep (admin password required; verify GUI access on your Mac) |
 | `awake 1 unlock lid` | Combine idle-lock prevention and lid-sleep suppression |
 | `awake .5` | Stay awake for 30 minutes, no admin password |
 | `awake 24` | Stay awake for a full day, no admin password |
@@ -70,7 +70,7 @@ A temporary per-user LaunchAgent independently checks for an ended or crashed un
 
 Normal `awake` and `awake 1 unlock` never request admin access. Keep the lid open. With an external display, power, and external input devices, macOS can provide closed-display operation itself without Awake changing the lid-sleep setting.
 
-For the laptop alone, use `awake 1 lid` to preserve the previous system-awake behavior. Only this explicit option asks for your Mac password. `awake 1 unlock lid` combines it with idle-lock prevention, but an unlocked, usable GUI with the lid closed has not been physically verified. Awake does not bypass manual or lid-triggered locks or supply a virtual display.
+For the laptop alone, use `awake 1 lid` to preserve the previous system-awake behavior. Only this explicit option asks for your Mac password. `awake 1 unlock lid` combines it with idle-lock prevention, with native GUI control and screenshot capture verified during one short laptop-only physical test. Behavior can vary by hardware, apps, macOS version, and security policy, so verify the setup on your own Mac before relying on it. Awake does not bypass manual or lid-triggered locks or supply a virtual display.
 
 If an older lid session left sleep disabled system-wide, an ordinary session stops with instructions for `awake off` rather than unexpectedly prompting for a password. Restoring that privileged setting can still require admin access.
 
