@@ -2,6 +2,22 @@
 
 All notable changes to this project are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [4.0.0] - 2026-10-30
+
+### Changed
+- Default `awake` and `awake [hours] unlock` are password-free and leave lid sleep under macOS control.
+- Lid-close sleep suppression now requires the explicit `lid` option, e.g. `awake 1 lid` or `awake 1 unlock lid`; only this mode asks for admin access.
+- Ordinary sessions fail without prompting if an existing privileged sleep override requires cleanup. `awake off` retains that recovery path.
+- Help and interactive hints distinguish password-free idle protection from privileged laptop-only lid suppression. One short laptop-only physical test verified an unlocked session, native GUI actions, screenshots, and automatic restoration with `awake .02 unlock lid`; broader hardware/app and long-duration behavior remains unverified.
+
+## [3.1.0] - 2026-10-30
+
+### Added
+- Optional `awake 1 unlock`, `awake unlock 1`, and `awake unlock` mode to pause the idle screen saver for the session without changing password requirements.
+- Interactive duration examples and support for entering `1 unlock` at the prompt.
+- Exact timeout restoration on expiry, off, replacement, or caffeinate exit; independent temporary launchd recovery after a killed guard or reboot, with synchronous recovery on the next invocation as well. User timeout changes are preserved.
+- Idle-lock mode status and visible startup/recovery failures.
+
 ## [3.0.0] - 2026-08-03
 
 ### Changed
