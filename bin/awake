@@ -1,10 +1,11 @@
 #!/bin/bash
-# awake — keep this Mac awake for N hours, even with the lid closed.
+# awake — keep this Mac awake for N hours; optional lid-close support.
 #
 #   awake            prompt for hours
 #   awake 1 unlock   stay awake and prevent idle locking for 1 hour
 #   awake unlock     prompt for hours with idle-lock prevention
-#   awake 1          stay awake 1 hour
+#   awake 1          stay awake 1 hour, no password
+#   awake 1 lid      also suppress lid-close sleep (admin required)
 #   awake .5         stay awake 30 minutes
 #   awake 24         stay awake a full day
 #   awake off        let the Mac sleep normally again
@@ -12,9 +13,9 @@
 #   awake --version  print version
 #   awake -h         show this help
 #
-# Keeps the display + system awake AND disables lid-close (clamshell) sleep,
-# so you can shut the lid and keep running. Needs your Mac password once per
-# session. Survives closing the terminal; does NOT survive a reboot.
+# Keeps the display + system awake without admin access. Add lid to suppress
+# clamshell sleep; only that option needs your Mac password. Survives closing
+# the terminal; does NOT survive a reboot.
 #
 # Heads up: with the lid closed on battery, the Mac runs full-power with the
 # screen off — it WILL drain the battery. Plug in for long sessions.
@@ -25,7 +26,7 @@
 
 set -euo pipefail
 
-VERSION="3.1.0"
+VERSION="4.0.0"
 
 STATE="${AWAKE_STATE_DIR:-$HOME/.cache/awake}"
 PIDFILE="$STATE/pid"
@@ -51,12 +52,14 @@ mkdir -p "$STATE"
 
 usage() {
   cat <<'EOF'
-awake — keep this Mac awake for N hours, even with the lid closed.
+awake — keep this Mac awake for N hours; optional lid-close support.
 
   awake            prompt for hours
   awake 1 unlock   stay awake and prevent idle locking for 1 hour
   awake unlock     prompt for hours with idle-lock prevention
-  awake 1          stay awake 1 hour
+  awake 1          stay awake 1 hour, no password
+  awake 1 lid      also suppress lid-close sleep (admin required)
+  awake 1 unlock lid  combine idle-lock prevention and lid-sleep suppression
   awake .5         stay awake 30 minutes
   awake 24         stay awake a full day
   awake off        let the Mac sleep normally again
@@ -64,8 +67,10 @@ awake — keep this Mac awake for N hours, even with the lid closed.
   awake --version  print version
   awake -h         show this help
 
-Keeps the display + system awake and disables lid-close (clamshell) sleep, so
-you can shut the lid and keep running. Needs your Mac password once per session.
+Normal awake and unlock sessions need no admin password. Keep the lid open,
+or use macOS closed-display mode with an external display, power, and input
+devices. Add lid for laptop-only lid-sleep suppression; that option needs admin
+access and does not guarantee an unlocked, usable GUI with the lid closed.
 Survives closing the terminal; does NOT survive a reboot.
 
 Unlock is optional: enter "1 unlock" at the prompt, or run "awake 1 unlock".
@@ -502,19 +507,24 @@ status | st)
 esac
 
 # --- start a new awake session ---
-# Accept hours + unlock in either order, including a single interactive line.
+# Accept hours, unlock, and lid in any order, including an interactive line.
 unlock=0
+lid_requested=0
 hours=""
 parse_start_args() {
   local arg
   for arg in "$@"; do
     case "$arg" in
+    lid)
+      ((lid_requested == 0)) || die "use lid only once."
+      lid_requested=1
+      ;;
     unlock)
       ((unlock == 0)) || die "use unlock only once."
       unlock=1
       ;;
     *)
-      [[ -z "$hours" ]] || die "please give one positive number of hours, optionally followed by unlock (e.g. awake 1 unlock)."
+      [[ -z "$hours" ]] || die "please give one positive number of hours, optionally with unlock or lid (e.g. awake 1 unlock)."
       hours="$arg"
       ;;
     esac
@@ -525,6 +535,9 @@ if [[ -z "$hours" ]]; then
   echo 'Hours: .5 = 30 minutes · 1 = 1 hour · 2 = 2 hours · 8 = workday · 24 = day'
   if ((unlock == 0)); then
     echo 'Add unlock to prevent idle locking too, e.g. 1 unlock (keep the lid open).'
+  fi
+  if ((lid_requested == 0)); then
+    echo 'Optional: add lid for laptop-only lid-sleep suppression (admin password required).'
   fi
   read -rp "Keep Mac awake for how long? " -a answer || true
   parse_start_args "${answer[@]}"
@@ -539,19 +552,25 @@ fi
 seconds=$(awk "BEGIN{printf \"%d\", $hours * 3600}")
 ((seconds < 1)) && seconds=1
 
-# Disabling clamshell sleep needs admin. Prompt once up front and cache the
-# credential so the background guard starts without a second prompt. Cancel the
-# password to fall back to idle-only awake (closing the lid will still sleep).
+# Only explicit lid mode authenticates. Ordinary awake/unlock never asks for
+# admin. An old system-wide sleep override needs its own explicit cleanup.
 lid_ok=0
-echo "🔒  Keeping the lid awake needs admin access (your Mac password)."
-if sudo -v; then
-  lid_ok=1
-else
-  echo "    No password given — starting idle-only (closing the lid will still sleep)."
+if ((lid_requested == 1)); then
+  echo "🔒  Keeping the lid awake needs admin access (your Mac password)."
+  if sudo -v; then
+    lid_ok=1
+  else
+    echo "    No password given — starting idle-only (closing the lid will still sleep)."
+  fi
+elif sleep_disabled_now; then
+  die "sleep is already disabled system-wide. Run awake off once to restore it (admin may be required), then retry this password-free session."
 fi
 
 acquire_command_lock || die "another awake command is still running; try again shortly."
 cleanup_stale
+if ((lid_requested == 0)) && sleep_disabled_now; then
+  die "a lid-sleep override is active. Run awake off to restore it before starting a password-free session."
+fi
 stop_unlock || exit 1
 stop_caffeinate # replace any caffeinate we already started
 
@@ -606,7 +625,7 @@ if ((lid_ok == 1)); then
   echo "    Built-in mic returns after reopening; use an external mic while closed."
   echo "    Runs full-power with the screen off — plug in for long sessions."
 else
-  printf "☕️  Mac will stay awake for %s (until %s) — idle only.\n" "$dur" "$(clock "$(cat "$UNTILFILE")")"
+  printf "☕️  Mac will stay awake for %s (until %s) — no admin password; lid sleep stays normal.\n" "$dur" "$(clock "$(cat "$UNTILFILE")")"
 fi
 if ((unlock == 1)); then
   echo "🔓  Idle-lock prevention is on for this session; previous timeout restores automatically."

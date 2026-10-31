@@ -2,7 +2,7 @@
 
 # awake
 
-*Keep your Mac awake, even with the lid closed.*
+*Keep your Mac awake without a password. Optional lid-close support.*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![CI](https://github.com/dancumberland/awake/actions/workflows/ci.yml/badge.svg)](https://github.com/dancumberland/awake/actions/workflows/ci.yml)
@@ -15,7 +15,7 @@
 
 ## Why this exists
 
-`caffeinate` is the macOS command for keeping a Mac awake while it sits idle. `awake` wraps it with a timer, survives closing the terminal, and keeps the Mac running when you close the lid. It also watches for the lid to reopen and automatically restores the built-in microphone if macOS fails to bring it back.
+`caffeinate` is the macOS command for keeping a Mac awake while it sits idle. `awake` wraps it with a timer, survives closing the terminal, and can optionally keep the Mac running when you close the lid. It also watches for the lid to reopen and automatically restores the built-in microphone if macOS fails to bring it back.
 
 ![Diagram comparing caffeinate's idle-sleep coverage with awake's added lid-close coverage](assets/lid-close.svg)
 
@@ -44,9 +44,11 @@ curl -fsSL https://raw.githubusercontent.com/dancumberland/awake/master/install.
 | `awake` | Prompt for how many hours to stay awake |
 | `awake 1 unlock` | Stay awake and pause idle locking for 1 hour (keep the lid open) |
 | `awake unlock` | Prompt for hours with idle-lock prevention selected |
-| `awake 1` | Stay awake for 1 hour, including with the lid closed |
-| `awake .5` | Stay awake for 30 minutes, including with the lid closed |
-| `awake 24` | Stay awake for a full day, including with the lid closed |
+| `awake 1` | Stay awake for 1 hour, no admin password |
+| `awake 1 lid` | Also suppress lid-close sleep (admin password required; unlocked GUI unverified) |
+| `awake 1 unlock lid` | Combine idle-lock prevention and lid-sleep suppression |
+| `awake .5` | Stay awake for 30 minutes, no admin password |
+| `awake 24` | Stay awake for a full day, no admin password |
 | `awake off` | Let the Mac sleep normally again, including on a lid close |
 | `awake status` | Show how much awake-time is left |
 
@@ -64,24 +66,28 @@ Start with the Mac unlocked and keep the lid open for GUI agents. This mode prev
 
 A temporary per-user LaunchAgent independently checks for an ended or crashed unlock guard every five seconds and after login. It restores the saved timeout after a forcibly killed guard or reboot, retries restoration errors, and removes its job when cleanup succeeds. macOS may delay its dispatch; it cannot run while the Mac is off or before login. Unlock mode refuses to start unless this recovery job is registered. `awake status` and `awake off` also provide immediate recovery. Recovery receipts are kept in `~/.cache/awake/unlock-recovery.log`.
 
-### Lid-close workflow
+### Password-free default and explicit lid mode
 
-Run `awake`, enter the number of hours, and close the lid when you need to. Awake keeps the Mac running until the timer ends or you run `awake off`.
+Normal `awake` and `awake 1 unlock` never request admin access. Keep the lid open. With an external display, power, and external input devices, macOS can provide closed-display operation itself without Awake changing the lid-sleep setting.
+
+For the laptop alone, use `awake 1 lid` to preserve the previous system-awake behavior. Only this explicit option asks for your Mac password. `awake 1 unlock lid` combines it with idle-lock prevention, but an unlocked, usable GUI with the lid closed has not been physically verified. Awake does not bypass manual or lid-triggered locks or supply a virtual display.
+
+If an older lid session left sleep disabled system-wide, an ordinary session stops with instructions for `awake off` rather than unexpectedly prompting for a password. Restoring that privileged setting can still require admin access.
 
 macOS physically disables the built-in microphone and camera while the lid is shut. An external microphone can remain available in that state. When you reopen the lid, Awake gives macOS a few seconds to return the built-in mic. If it stays missing, Awake restarts the Mac audio service automatically.
 
 ## What it does with `sudo`, exactly
 
-Awake changes one systemwide setting that macOS only lets root change. It normally runs these two commands as root:
+Only explicit `lid` mode changes a systemwide setting that macOS only lets root change. That mode runs these two commands as root:
 
 - `pmset -a disablesleep 1` when a session starts, to block clamshell sleep.
 - `pmset -a disablesleep 0` when the session ends or the timer runs out, to restore normal sleep.
 
 If the built-in mic fails to return after the lid opens, the same root-owned session guard runs `killall coreaudiod` once. macOS relaunches that audio service automatically.
 
-That covers the entire use of root. The sleep setting applies to the whole system, so macOS asks for an admin password when Awake starts.
+That covers the entire use of root. The sleep setting applies to the whole system, so macOS asks for an admin password when explicit lid mode starts.
 
-You can decline the password prompt. `awake` falls back to lid-open protection. Nothing fails or crashes, and closing the lid lets the Mac sleep.
+In lid mode, you can decline the password prompt. `awake` falls back to lid-open protection. Nothing fails or crashes, and closing the lid lets the Mac sleep.
 
 ## Battery
 

@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [4.0.0] - 2026-10-30
+
+### Changed
+- Default `awake` and `awake [hours] unlock` are password-free and leave lid sleep under macOS control.
+- Lid-close sleep suppression now requires the explicit `lid` option, e.g. `awake 1 lid` or `awake 1 unlock lid`; only this mode asks for admin access.
+- Ordinary sessions fail without prompting if an existing privileged sleep override requires cleanup. `awake off` retains that recovery path.
+- Help and interactive hints distinguish password-free idle protection from privileged laptop-only lid suppression. Closed-lid unlocked GUI access remains physically unverified.
+
 ## [3.1.0] - 2026-10-30
 
 ### Added

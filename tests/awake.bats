@@ -179,11 +179,11 @@ SH
   [[ "$output" == *"Awake for"* ]]
 }
 
-# --- singular lid-close workflow ---
+# --- explicit lid-close workflow ---
 
-@test "default mode enables lid-close and records the built-in mic for recovery" {
+@test "explicit lid mode enables lid-close and records the built-in mic for recovery" {
   stub_mic present
-  run "$AWAKE" 1
+  run "$AWAKE" 1 lid
   [ "$status" -eq 0 ]
   [[ "$output" == *"lid can be CLOSED"* ]]
   [[ "$output" == *"Built-in mic returns after reopening"* ]]
@@ -198,7 +198,7 @@ SH
   [ -f "$AWAKE_STATE_DIR/mic" ]
 }
 
-@test "old mode arguments are rejected so the public workflow stays singular" {
+@test "old mode arguments are rejected so the obsolete mic mode stays removed" {
   run "$AWAKE" mic 1
   [ "$status" -ne 0 ]
   [[ "$output" == *"positive number"* ]]
@@ -220,7 +220,7 @@ SH
 @test "--version prints the version and exits 0" {
   run "$AWAKE" --version
   [ "$status" -eq 0 ]
-  [[ "$output" == *"awake 3.1.0"* ]]
+  [[ "$output" == *"awake 4.0.0"* ]]
 }
 
 @test "-h prints help and exits 0" {
@@ -623,4 +623,51 @@ teardown() {
   [ "$(cat "$SAVER_STATE_FILE")" = 300 ]
   [ ! -d "$AWAKE_STATE_DIR/unlock" ]
   grep -q 'bootout' "$LAUNCHCTL_LOG"
+}
+
+
+@test "default awake never calls sudo" {
+  run "$AWAKE" 1
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"no admin password"* ]]
+  [ ! -f "$SUDO_LOG" ]
+  [ ! -f "$AWAKE_STATE_DIR/lid" ]
+}
+
+@test "unlock never calls sudo on start or off" {
+  export KEEP_CAFFEINATE=1
+  run "$AWAKE" 1 unlock
+  [ "$status" -eq 0 ]
+  [ ! -f "$SUDO_LOG" ]
+  run "$AWAKE" off
+  [ "$status" -eq 0 ]
+  [ ! -f "$SUDO_LOG" ]
+}
+
+@test "interactive normal awake never calls sudo" {
+  run bash -c 'printf "1\n" | "$1"' _ "$AWAKE"
+  [ "$status" -eq 0 ]
+  [ ! -f "$SUDO_LOG" ]
+}
+
+@test "lid and unlock can be combined explicitly" {
+  export KEEP_CAFFEINATE=1
+  stub_mic absent
+  run "$AWAKE" 1 unlock lid
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"lid can be CLOSED"* ]]
+  [[ "$output" == *"Idle-lock prevention is on"* ]]
+  grep -q 'sudo -v' "$SUDO_LOG"
+  run "$AWAKE" off
+  [ "$status" -eq 0 ]
+}
+
+@test "pre-existing privileged sleep override fails without prompting" {
+  echo 1 >"$PMSET_STATE_FILE"
+  run "$AWAKE" 1 unlock
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Run awake off once"* ]]
+  [ ! -f "$SUDO_LOG" ]
+  [ "$(cat "$PMSET_STATE_FILE")" = 1 ]
+  [ ! -f "$DEFAULTS_LOG" ]
 }
