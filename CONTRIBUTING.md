@@ -11,8 +11,8 @@ brew install shellcheck shfmt bats-core
 ## Before opening a PR
 
 ```sh
-shellcheck bin/awake libexec/awake-lid-helper scripts/setup-lid-helper.sh
-shfmt -i 2 -d bin/awake libexec/awake-lid-helper scripts/setup-lid-helper.sh
+shellcheck bin/awake libexec/awake-lid-helper scripts/setup-lid-helper.sh install.sh
+shfmt -i 2 -d bin/awake libexec/awake-lid-helper scripts/setup-lid-helper.sh install.sh
 bats tests/
 ```
 

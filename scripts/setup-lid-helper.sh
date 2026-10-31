@@ -9,7 +9,9 @@ STATE=/var/db/com.dancumberland.awake-lid
 RULE=/private/etc/sudoers.d/awake-lid
 LABEL=com.dancumberland.awake-lid-watchdog
 PLIST=/Library/LaunchDaemons/$LABEL.plist
-SOURCE="$(cd "$(dirname "${BASH_SOURCE[0]}")/../libexec" && pwd -P)/awake-lid-helper"
+SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+SOURCE="$SOURCE_DIR/awake-lid-helper"
+if [[ ! -f "$SOURCE" ]]; then SOURCE="$SOURCE_DIR/../libexec/awake-lid-helper"; fi
 
 fail() {
   echo "awake setup: $*" >&2

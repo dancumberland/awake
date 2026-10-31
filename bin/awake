@@ -74,7 +74,8 @@ Normal awake and unlock sessions need no admin password. Keep the lid open,
 or use macOS closed-display mode with an external display, power, and input
 devices. Add lid for laptop-only lid-sleep suppression; that option needs admin
 access unless the optional one-time setup is installed. Run awake setup once
-from the full source checkout. Helper-backed sessions are limited to 24 hours.
+after installing with Homebrew, the standalone installer, or a source checkout.
+Helper-backed sessions are limited to 24 hours.
 Combine unlock lid for closed-lid GUI work; verify on your Mac.
 Survives closing the terminal; does NOT survive a reboot.
 
@@ -431,7 +432,9 @@ run_helper_setup() {
   done
   parent=$(cd "$(dirname "$resolved")/.." && pwd -P)
   installer="$parent/scripts/setup-lid-helper.sh"
-  [[ -f "$installer" ]] || die "setup requires the full awake source checkout (scripts/setup-lid-helper.sh and libexec/awake-lid-helper)."
+  if [[ ! -f "$installer" ]]; then installer="$parent/libexec/setup-lid-helper.sh"; fi
+  if [[ ! -f "$installer" ]]; then installer="$parent/libexec/awake/setup-lid-helper.sh"; fi
+  [[ -f "$installer" ]] || die "setup files are missing; reinstall awake with Homebrew or the bundled standalone installer."
   if [[ "$action" == install ]] && lid_helper_ready; then
     echo "Awake lid helper is already installed and available for this account."
     return 0

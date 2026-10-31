@@ -40,7 +40,7 @@ brew update
 brew upgrade awake
 ```
 
-Or run the install script, which drops a single file into `/usr/local/bin`:
+Or run the standalone installer, which installs `awake` in `/usr/local/bin` and its optional setup files in `/usr/local/libexec/awake`:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/dancumberland/awake/master/install.sh | bash
@@ -51,7 +51,8 @@ curl -fsSL https://raw.githubusercontent.com/dancumberland/awake/master/install.
 ```sh
 awake 1             # Keep the Mac awake for 1 hour; no password
 awake 1 unlock      # Also prevent idle locking; no password, lid open
-awake 1 unlock lid  # Also suppress lid sleep; admin password required
+awake setup         # Optional: enter your Mac password once
+awake 1 unlock lid  # Closed-lid mode; password-free after setup
 awake off           # Stop early and restore normal behavior
 ```
 
@@ -61,7 +62,7 @@ Upgrading from v3: plain `awake` no longer suppresses lid sleep. Add `lid` to pr
 
 ## Optional one-time setup for password-free lid mode
 
-From the full source checkout, run:
+After installing with Homebrew, the standalone installer, or a source checkout, run:
 
 ```sh
 awake setup             # Enter your Mac password once
@@ -86,7 +87,7 @@ Remove the grant and installed components with:
 awake uninstall-helper  # One admin authentication; restores sleep first
 ```
 
-The published standalone/Homebrew v4.0.0 install does not contain the optional setup files; this setup is currently available from the full source checkout. An existing privileged sleep override must be stopped with `awake off` before installation.
+Version 4.1.0 bundles the setup files in both installation methods. Stop an existing privileged sleep override with `awake off` before first-time setup. Upgrading the package updates the command and setup files; it does not silently replace an already-installed root helper or alter its grant. If `awake setup` reports that this account is already configured, no repeat authentication is needed. To replace the installed helper itself, uninstall it first, then run setup again.
 
 ## Usage
 
@@ -96,7 +97,10 @@ The published standalone/Homebrew v4.0.0 install does not contain the optional s
 | `awake 1 unlock` | Stay awake and pause idle locking for 1 hour (keep the lid open) |
 | `awake unlock` | Prompt for hours with idle-lock prevention selected |
 | `awake 1` | Stay awake for 1 hour, no admin password |
-| `awake 1 lid` | Also suppress lid-close sleep (admin password required; verify GUI access on your Mac) |
+| `awake 1 lid` | Also suppress lid-close sleep; password-free after setup |
+| `awake setup` | Install the optional narrow helper with one admin authentication |
+| `awake helper-status` | Check the installed helper without a password prompt |
+| `awake uninstall-helper` | Restore sleep and remove the helper/grant (admin required) |
 | `awake 1 unlock lid` | Combine idle-lock prevention and lid-sleep suppression |
 | `awake .5` | Stay awake for 30 minutes, no admin password |
 | `awake 24` | Stay awake for a full day, no admin password |
@@ -167,19 +171,28 @@ The audio service relaunches within a second or two. Restarting it briefly inter
 
 ## Uninstall
 
+Stop any active session first. If you enabled the optional root helper, remove it before removing the command:
+
+```sh
+awake off
+awake uninstall-helper  # Only if configured; one admin authentication
+```
+
 Homebrew:
 
 ```sh
 brew uninstall awake
 ```
 
-If you used the install script, remove the file:
+Standalone installer (default prefix; adjust paths for a custom `AWAKE_INSTALL_PREFIX`):
 
 ```sh
-rm -f /usr/local/bin/awake
+sudo rm -f /usr/local/bin/awake
+sudo rm -f /usr/local/libexec/awake/awake-lid-helper /usr/local/libexec/awake/setup-lid-helper.sh
+sudo rmdir /usr/local/libexec/awake
 ```
 
-If a session is active, run `awake off` first to restore normal sleep and the screen-saver timeout before uninstalling. The recovery LaunchAgent removes itself after successful cleanup. If restoration fails, keep Awake installed until `awake off` succeeds.
+Successful cleanup restores normal sleep and the previous screen-saver timeout. The per-user unlock recovery job removes itself after restoration. If restoration fails, keep Awake installed until `awake off` succeeds. The optional helper's uninstall removes its sudo grant, root job, and executable; protected diagnostic state is retained.
 
 ---
 
