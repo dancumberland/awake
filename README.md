@@ -57,7 +57,36 @@ awake off           # Stop early and restore normal behavior
 
 Plain `awake` lists common durations and accepts inputs such as `1 unlock` or `1 unlock lid`. `.5` means 30 minutes; `2`, `8`, and `24` mean hours.
 
-Upgrading from v3: plain `awake` no longer suppresses lid sleep. Add `lid` to preserve that behavior. After installing this release, `awake --version` should print `awake 4.0.0`.
+Upgrading from v3: plain `awake` no longer suppresses lid sleep. Add `lid` to preserve that behavior. After installing this release, `awake --version` should print `awake 4.1.0`.
+
+## Optional one-time setup for password-free lid mode
+
+From the full source checkout, run:
+
+```sh
+awake setup             # Enter your Mac password once
+awake helper-status     # Verify the installed helper
+awake 1 unlock lid      # Future runs do not ask for a password
+```
+
+Setup installs a root-owned fixed-function helper, a narrow sudo rule for the account that runs setup, and a root recovery LaunchDaemon. The grant permits only starting a 1–86400 second session, stopping that account’s session, and reading helper status. It does not grant arbitrary commands or direct password-free `pmset` access. The helper ignores shell startup environment code, uses fixed system executables, and keeps its lease state in a root-only directory.
+
+Installed paths:
+
+- `/Library/PrivilegedHelperTools/com.dancumberland.awake-lid`
+- `/private/etc/sudoers.d/awake-lid`
+- `/Library/LaunchDaemons/com.dancumberland.awake-lid-watchdog.plist`
+- `/var/db/com.dancumberland.awake-lid/` (protected state and diagnostic receipts)
+
+The installer validates sudo/plist syntax, checks real timed expiry, then kills its own test worker and verifies scheduled recovery before reporting success. A separate root watchdog restores sleep after a dead, expired, or previous-boot guard; failures retain state for retry. Password-free lid sessions are limited to 24 hours. The guard retains the existing conditional microphone recovery after a lid reopen.
+
+Remove the grant and installed components with:
+
+```sh
+awake uninstall-helper  # One admin authentication; restores sleep first
+```
+
+The published standalone/Homebrew v4.0.0 install does not contain the optional setup files; this setup is currently available from the full source checkout. An existing privileged sleep override must be stopped with `awake off` before installation.
 
 ## Usage
 
@@ -92,7 +121,7 @@ A temporary per-user LaunchAgent independently checks for an ended or crashed un
 
 Normal `awake` and `awake 1 unlock` never request admin access. Keep the lid open. With an external display, power, and external input devices, macOS can provide closed-display operation itself without Awake changing the lid-sleep setting.
 
-For the laptop alone, use `awake 1 lid` to preserve the previous system-awake behavior. Only this explicit option asks for your Mac password. `awake 1 unlock lid` combines it with idle-lock prevention, with native GUI control and screenshot capture verified during one short laptop-only physical test. Behavior can vary by hardware, apps, macOS version, and security policy, so verify the setup on your own Mac before relying on it. Awake does not bypass manual or lid-triggered locks or supply a virtual display.
+For the laptop alone, use `awake 1 lid` to preserve the previous system-awake behavior. This option asks for your Mac password unless the one-time helper setup is installed. `awake 1 unlock lid` combines it with idle-lock prevention, with native GUI control and screenshot capture verified during one short laptop-only physical test. Behavior can vary by hardware, apps, macOS version, and security policy, so verify the setup on your own Mac before relying on it. Awake does not bypass manual or lid-triggered locks or supply a virtual display.
 
 If an older lid session left sleep disabled system-wide, an ordinary session stops with instructions for `awake off` rather than unexpectedly prompting for a password. Restoring that privileged setting can still require admin access.
 
@@ -107,7 +136,7 @@ Only explicit `lid` mode changes a systemwide setting that macOS only lets root 
 
 If the built-in mic fails to return after the lid opens, the same root-owned session guard runs `killall coreaudiod` once. macOS relaunches that audio service automatically.
 
-That covers the entire use of root. The sleep setting applies to the whole system, so macOS asks for an admin password when explicit lid mode starts.
+That covers the entire use of root. The sleep setting applies to the whole system, so explicit lid mode requires either per-session admin authentication or the optional narrow helper grant.
 
 In lid mode, you can decline the password prompt. `awake` falls back to lid-open protection. Nothing fails or crashes, and closing the lid lets the Mac sleep.
 

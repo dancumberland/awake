@@ -2,12 +2,11 @@
 # awake — keep this Mac awake for N hours; optional lid-close support.
 #
 #   awake            prompt for hours
-#   awake 1 unlock   stay awake and prevent idle locking for 1 hour
-#   awake unlock     prompt for hours with idle-lock prevention
-#   awake 1          stay awake 1 hour, no password
-#   awake 1 lid      also suppress lid-close sleep (admin required)
-#   awake .5         stay awake 30 minutes
-#   awake 24         stay awake a full day
+#   awake 1 unlock   prevent idle locking for 1 hour
+#   awake 1 lid      suppress lid sleep; optional one-time setup
+#   awake setup      install the optional fixed-function helper
+#   awake helper-status  check helper availability
+#   awake uninstall-helper  remove the optional helper
 #   awake off        let the Mac sleep normally again
 #   awake status     show how much awake-time is left
 #   awake --version  print version
@@ -26,7 +25,7 @@
 
 set -euo pipefail
 
-VERSION="4.0.0"
+VERSION="4.1.0"
 
 STATE="${AWAKE_STATE_DIR:-$HOME/.cache/awake}"
 PIDFILE="$STATE/pid"
@@ -35,6 +34,7 @@ LIDFILE="$STATE/lid"
 MICFILE="$STATE/mic"
 UNLOCKDIR="$STATE/unlock"
 SCRIPT_PATH="${BASH_SOURCE[0]}"
+LID_HELPER=/Library/PrivilegedHelperTools/com.dancumberland.awake-lid
 RECOVERY_LABEL="com.dancumberland.awake.unlock.$(printf %s "$STATE" | cksum | awk '{print $1}')"
 RECOVERY_DOMAIN="gui/$(id -u)"
 RECOVERY_PLIST="${AWAKE_LAUNCH_AGENTS_DIR:-$HOME/Library/LaunchAgents}/$RECOVERY_LABEL.plist"
@@ -58,10 +58,13 @@ awake — keep this Mac awake for N hours; optional lid-close support.
   awake 1 unlock   stay awake and prevent idle locking for 1 hour
   awake unlock     prompt for hours with idle-lock prevention
   awake 1          stay awake 1 hour, no password
-  awake 1 lid      also suppress lid-close sleep (admin required)
+  awake 1 lid      suppress lid sleep (password-free after one-time setup)
   awake 1 unlock lid  combine idle-lock prevention and lid-sleep suppression
   awake .5         stay awake 30 minutes
   awake 24         stay awake a full day
+  awake setup      one-time admin setup for password-free lid mode
+  awake helper-status  check the optional installed helper
+  awake uninstall-helper  remove the optional helper (admin required)
   awake off        let the Mac sleep normally again
   awake status     show how much awake-time is left
   awake --version  print version
@@ -70,7 +73,9 @@ awake — keep this Mac awake for N hours; optional lid-close support.
 Normal awake and unlock sessions need no admin password. Keep the lid open,
 or use macOS closed-display mode with an external display, power, and input
 devices. Add lid for laptop-only lid-sleep suppression; that option needs admin
-access. Combine unlock lid for closed-lid GUI work; verify on your Mac.
+access unless the optional one-time setup is installed. Run awake setup once
+from the full source checkout. Helper-backed sessions are limited to 24 hours.
+Combine unlock lid for closed-lid GUI work; verify on your Mac.
 Survives closing the terminal; does NOT survive a reboot.
 
 Unlock is optional: enter "1 unlock" at the prompt, or run "awake 1 unlock".
@@ -413,6 +418,28 @@ stop_caffeinate() {
   rm -f "$PIDFILE" "$UNTILFILE"
 }
 
+lid_helper_ready() {
+  sudo -n "$LID_HELPER" status >/dev/null 2>&1
+}
+
+run_helper_setup() {
+  local action="$1" resolved="$SCRIPT_PATH" parent installer
+  while [[ -L "$resolved" ]]; do
+    parent=$(cd "$(dirname "$resolved")" && pwd -P)
+    resolved=$(readlink "$resolved")
+    [[ "$resolved" == /* ]] || resolved="$parent/$resolved"
+  done
+  parent=$(cd "$(dirname "$resolved")/.." && pwd -P)
+  installer="$parent/scripts/setup-lid-helper.sh"
+  [[ -f "$installer" ]] || die "setup requires the full awake source checkout (scripts/setup-lid-helper.sh and libexec/awake-lid-helper)."
+  if [[ "$action" == install ]] && lid_helper_ready; then
+    echo "Awake lid helper is already installed and available for this account."
+    return 0
+  fi
+  echo "One-time admin approval: install/remove only the fixed Awake lid helper, narrow sudo rule, and recovery job."
+  sudo "$installer" "$action"
+}
+
 # Restore normal clamshell sleep — but only reach for sudo when LIVE system
 # state actually shows sleep disabled. This is the reboot-proof half of the
 # fix: it trusts `pmset -g`, not the lid marker, so a stuck disablesleep=1 with
@@ -421,11 +448,16 @@ stop_caffeinate() {
 # stays password-free.
 restore_lid_if_needed() {
   if sleep_disabled_now; then
-    echo "🔒  Restoring normal sleep needs admin access (your Mac password)."
-    sudo pkill -f 'awake-lid-guard' 2>/dev/null || true
-    sudo pmset -a disablesleep 0 2>/dev/null || true
+    if lid_helper_ready; then
+      sudo -n "$LID_HELPER" stop || return 1
+    else
+      echo "🔒  Restoring normal sleep needs admin access (your Mac password)."
+      sudo pkill -f 'awake-lid-guard' 2>/dev/null || true
+      sudo pmset -a disablesleep 0 2>/dev/null || true
+    fi
     if sleep_disabled_now; then
-      echo "⚠️  Couldn't restore sleep — it's still disabled. Try:  sudo pmset -a disablesleep 0" >&2
+      echo "⚠️  Couldn't restore sleep — it's still disabled. Run awake off again." >&2
+      return 1
     fi
   fi
   rm -f "$LIDFILE"
@@ -453,6 +485,21 @@ esac
 cmd="${1:-}"
 
 case "$cmd" in
+setup)
+  [[ $# -eq 1 ]] || die "usage: awake setup"
+  run_helper_setup install
+  exit 0
+  ;;
+uninstall-helper)
+  [[ $# -eq 1 ]] || die "usage: awake uninstall-helper"
+  run_helper_setup uninstall
+  exit 0
+  ;;
+helper-status)
+  [[ $# -eq 1 ]] || die "usage: awake helper-status"
+  sudo -n "$LID_HELPER" status || die "helper is unavailable for this account; run awake setup for the one-time installation."
+  exit 0
+  ;;
 off | stop | none | 0)
   [[ $# -eq 1 ]] || die "usage: awake off"
   acquire_command_lock || die "another awake command is still running; try again shortly."
@@ -538,7 +585,7 @@ if [[ -z "$hours" ]]; then
     echo 'Add unlock to prevent idle locking too, e.g. 1 unlock (keep the lid open).'
   fi
   if ((lid_requested == 0)); then
-    echo 'Optional: add lid for laptop-only lid-sleep suppression (admin password required).'
+    echo 'Optional: add lid for laptop-only lid-sleep suppression (one-time setup available).'
   fi
   read -rp "Keep Mac awake for how long? " -a answer || true
   parse_start_args "${answer[@]}"
@@ -556,7 +603,13 @@ seconds=$(awk "BEGIN{printf \"%d\", $hours * 3600}")
 # Only explicit lid mode authenticates. Ordinary awake/unlock never asks for
 # admin. An old system-wide sleep override needs its own explicit cleanup.
 lid_ok=0
-if ((lid_requested == 1)); then
+lid_backend=legacy
+if ((lid_requested == 1)) && lid_helper_ready; then
+  ((seconds <= 86400)) || die "helper-backed lid sessions are limited to 24 hours."
+  lid_ok=1
+  lid_backend=helper
+  echo "🔓  Using the installed lid helper — no admin password needed."
+elif ((lid_requested == 1)); then
   echo "🔒  Keeping the lid awake needs admin access (your Mac password)."
   if sudo -v; then
     lid_ok=1
@@ -601,7 +654,14 @@ if ((lid_ok == 1)); then
   # repairs a missing built-in mic, and restores sleep when the timer ends.
   # The subcommand name lets `awake off` find and stop it. nohup lets it survive
   # closing this terminal.
-  nohup sudo env AWAKE_STATE_DIR="$STATE" "$SCRIPT_PATH" awake-lid-guard "$seconds" "$mic_expected" >/dev/null 2>&1 &
+  if [[ "$lid_backend" == helper ]]; then
+    if ! sudo -n "$LID_HELPER" start "$seconds" "$mic_expected"; then
+      stop_caffeinate
+      die "the installed lid helper could not start; no awake session was kept."
+    fi
+  else
+    nohup sudo env AWAKE_STATE_DIR="$STATE" "$SCRIPT_PATH" awake-lid-guard "$seconds" "$mic_expected" >/dev/null 2>&1 &
+  fi
   echo "$(($(date +%s) + seconds))" >"$LIDFILE"
 fi
 

@@ -1,6 +1,6 @@
 # Contributing
 
-`awake` is a single bash script. Small, focused changes are easiest to review — if you're planning something bigger, open an issue first so we can talk through the approach.
+`bin/awake` is the main Bash script. Optional privileged setup lives in `libexec/awake-lid-helper` and `scripts/setup-lid-helper.sh`. Small, focused changes are easiest to review — if you're planning something bigger, open an issue first so we can talk through the approach.
 
 ## Setup
 
@@ -11,8 +11,8 @@ brew install shellcheck shfmt bats-core
 ## Before opening a PR
 
 ```sh
-shellcheck bin/awake
-shfmt -d bin/awake
+shellcheck bin/awake libexec/awake-lid-helper scripts/setup-lid-helper.sh
+shfmt -i 2 -d bin/awake libexec/awake-lid-helper scripts/setup-lid-helper.sh
 bats tests/
 ```
 

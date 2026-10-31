@@ -1,0 +1,236 @@
+#!/bin/bash -p
+# Root-owned, fixed-function lid-sleep helper. Never source user-owned code.
+set -euo pipefail
+PATH=/usr/bin:/bin:/usr/sbin:/sbin
+export PATH
+umask 077
+HELPER=/Library/PrivilegedHelperTools/com.dancumberland.awake-lid
+STATE=/var/db/com.dancumberland.awake-lid
+LABEL=com.dancumberland.awake-lid-watchdog
+MAX_SECONDS=86400
+
+fail() {
+  echo "awake-lid-helper: $*" >&2
+  return 1
+}
+now() { /bin/date +%s; }
+boot_id() { /usr/sbin/sysctl -n kern.boottime; }
+sleep_disabled() { /usr/bin/pmset -g | /usr/bin/awk '/SleepDisabled/ {print $2; exit}'; }
+set_sleep() { /usr/bin/pmset -a disablesleep "$1"; }
+log_event() {
+  printf '%s %s\n' "$(/bin/date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*" >>"$STATE/events.log" || true
+  /usr/bin/logger -t awake-lid-helper -- "$*" || true
+}
+lock_state() {
+  local n
+  for ((n = 0; n < 50; n++)); do
+    if /usr/bin/shlock -f "$STATE/lock" -p "$$"; then
+      return 0
+    fi
+    /bin/sleep 0.1
+  done
+  fail "state is busy"
+}
+unlock_state() { /bin/rm -f "$STATE/lock"; }
+field() { /bin/cat "$STATE/$1" 2>/dev/null; }
+lease_matches() { [[ -f "$STATE/token" && "$(field token)" == "$1" ]]; }
+valid_seconds() { [[ "$1" =~ ^[1-9][0-9]{0,4}$ ]] && ((10#$1 <= MAX_SECONDS)); }
+valid_uid() { [[ "$1" =~ ^[0-9]{1,10}$ ]] && ((10#$1 <= 2147483647)); }
+valid_token() { [[ "$1" =~ ^[A-Fa-f0-9-]{36}$ ]]; }
+caller_uid() {
+  local uid="${SUDO_UID:-0}"
+  valid_uid "$uid" || return 1
+  printf '%s\n' "$uid"
+}
+authorized_owner() {
+  [[ ! -f "$STATE/token" ]] && return 0
+  local caller owner
+  caller=$(caller_uid) || return 1
+  owner=$(field owner) || return 1
+  [[ "$caller" == 0 || "$caller" == "$owner" ]]
+}
+secure_state() {
+  [[ -d "$STATE" && ! -L "$STATE" ]] || {
+    fail "missing secure state directory"
+    return 1
+  }
+  [[ "$(/usr/bin/stat -f '%u:%Lp' "$STATE")" == '0:700' ]] || {
+    fail "unsafe state directory ownership or mode"
+    return 1
+  }
+}
+guard_running() {
+  local pid token owner cmd
+  pid=$(field pid) || return 1
+  token=$(field token) || return 1
+  [[ "$pid" =~ ^[1-9][0-9]*$ ]] && valid_token "$token" || return 1
+  owner=$(/bin/ps -p "$pid" -o uid= 2>/dev/null | /usr/bin/tr -d ' ') || return 1
+  [[ "$owner" == 0 ]] || return 1
+  cmd=$(/bin/ps -ww -p "$pid" -o command= 2>/dev/null) || return 1
+  [[ "$cmd" == *" $HELPER _hold $token" ]]
+}
+clear_lease() {
+  /bin/rm -f "$STATE/token" "$STATE/pid" "$STATE/deadline" "$STATE/boot" "$STATE/owner" "$STATE/mic"
+}
+restore_lease_locked() {
+  [[ -f "$STATE/token" ]] || return 0
+  set_sleep 0 || return 1
+  [[ "$(sleep_disabled)" == 0 ]] || return 1
+  clear_lease
+  log_event "sleep restored; lease closed"
+}
+finish_lease() {
+  local token="$1" result=0
+  lock_state || return 1
+  if lease_matches "$token"; then restore_lease_locked || result=1; fi
+  unlock_state
+  return "$result"
+}
+lid_closed() {
+  /usr/sbin/ioreg -r -k AppleClamshellState -d 4 | /usr/bin/awk -F'= ' '/"AppleClamshellState"/ {print $2; exit}' | /usr/bin/grep -qi yes
+}
+mic_present() {
+  /usr/sbin/system_profiler -json SPAudioDataType | /usr/bin/awk '
+    /\{/ { builtin = 0; input = 0 }
+    /"coreaudio_device_transport" *: *"coreaudio_device_type_builtin"/ { builtin = 1 }
+    /"coreaudio_device_input" *: *[1-9]/ { input = 1 }
+    /\}/ { if (builtin && input) found = 1; builtin = 0; input = 0 }
+    END { exit !found }
+  '
+}
+hold_lease() {
+  local token="$1" deadline mic saw_closed=0
+  valid_token "$token" || return 1
+  lease_matches "$token" || return 0
+  deadline=$(field deadline)
+  mic=$(field mic)
+  trap 'finish_lease "$token" || log_event "ERROR: restoration pending; watchdog will retry"' EXIT
+  trap 'exit 0' TERM INT HUP
+  while lease_matches "$token" && (($(now) < deadline)); do
+    if lid_closed; then
+      saw_closed=1
+    elif ((saw_closed == 1)); then
+      if [[ "$mic" == 1 ]]; then
+        /bin/sleep 4
+        if lease_matches "$token" && ! lid_closed && ! mic_present; then
+          /usr/bin/killall coreaudiod 2>/dev/null || true
+        fi
+      fi
+      saw_closed=0
+    fi
+    /bin/sleep 1
+  done
+}
+stop_lease() {
+  local result=0
+  lock_state || return 1
+  if ! authorized_owner; then
+    unlock_state
+    fail "session belongs to another account"
+    return 1
+  fi
+  if [[ -f "$STATE/token" ]]; then
+    if guard_running; then kill -TERM "$(field pid)" 2>/dev/null || true; fi
+    restore_lease_locked || result=1
+  elif [[ "$(sleep_disabled)" != 0 ]]; then
+    fail "sleep override is not owned by this helper" || true
+    result=1
+  fi
+  unlock_state
+  return "$result"
+}
+start_lease() {
+  local seconds="$1" mic="$2" token owner result=0
+  valid_seconds "$seconds" && [[ "$mic" == 0 || "$mic" == 1 ]] || {
+    fail "duration must be 1..86400 seconds; mic flag must be 0 or 1"
+    return 1
+  }
+  /bin/launchctl print "system/$LABEL" >/dev/null 2>&1 || {
+    fail "recovery watchdog is not loaded"
+    return 1
+  }
+  owner=$(caller_uid) || return 1
+  stop_lease || return 1
+  lock_state || return 1
+  # Another start may have acquired the lock after stop. Never overwrite a lease.
+  if [[ -f "$STATE/token" || "$(sleep_disabled)" != 0 ]]; then
+    unlock_state
+    fail "a concurrent or unowned sleep override is active"
+    return 1
+  fi
+  token=$(/usr/bin/uuidgen)
+  printf '%s\n' "$owner" >"$STATE/owner"
+  printf '%s\n' "$(($(now) + 10#$seconds))" >"$STATE/deadline"
+  boot_id >"$STATE/boot"
+  printf '%s\n' "$mic" >"$STATE/mic"
+  printf '%s\n' "$token" >"$STATE/token"
+  if set_sleep 1 && [[ "$(sleep_disabled)" == 1 ]]; then
+    /usr/bin/nohup "$HELPER" _hold "$token" </dev/null >/dev/null 2>&1 &
+    printf '%s\n' "$!" >"$STATE/pid"
+    log_event "lease started for ${seconds}s, uid $owner"
+  else
+    restore_lease_locked || true
+    result=1
+  fi
+  unlock_state
+  return "$result"
+}
+recover_lease() {
+  [[ -f "$STATE/token" ]] || return 0
+  lock_state || return 1
+  local result=0
+  if [[ -f "$STATE/token" ]]; then
+    if [[ "$(field boot)" != "$(boot_id)" ]] || (($(now) >= $(field deadline))) || ! guard_running; then
+      log_event "RECOVERY: ended, missing, or previous-boot guard detected"
+      if guard_running; then kill -TERM "$(field pid)" 2>/dev/null || true; fi
+      restore_lease_locked || result=1
+    fi
+  fi
+  unlock_state
+  return "$result"
+}
+main() {
+  [[ $EUID -eq 0 ]] || {
+    fail "requires root via the installed narrow sudo rule"
+    return 1
+  }
+  readonly HELPER STATE LABEL MAX_SECONDS PATH
+  secure_state || return 1
+  local command="${1:-}"
+  case "$command" in
+  start)
+    [[ $# -eq 3 ]] || {
+      fail "usage: start SECONDS MIC_FLAG"
+      return 1
+    }
+    valid_seconds "$2" && [[ "$3" == 0 || "$3" == 1 ]] || {
+      fail "invalid start arguments"
+      return 1
+    }
+    start_lease "$2" "$3"
+    ;;
+  stop)
+    [[ $# -eq 1 ]] || return 1
+    stop_lease
+    ;;
+  status)
+    [[ $# -eq 1 ]] || return 1
+    /bin/launchctl print "system/$LABEL" >/dev/null 2>&1 || {
+      fail "watchdog is not loaded"
+      return 1
+    }
+    echo "awake-lid-helper 1.0.0"
+    if [[ -f "$STATE/token" ]]; then echo "lease active until $(field deadline)"; else echo "lease inactive"; fi
+    ;;
+  recover)
+    [[ $# -eq 1 ]] || return 1
+    recover_lease
+    ;;
+  _hold)
+    [[ $# -eq 2 ]] || return 1
+    hold_lease "$2"
+    ;;
+  *) fail "unsupported operation" ;;
+  esac
+}
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then main "$@"; fi

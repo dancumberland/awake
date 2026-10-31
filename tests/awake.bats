@@ -71,6 +71,15 @@ SH
   cat >"$STUB_BIN/sudo" <<'SH'
 #!/bin/bash
 echo "sudo $*" >>"$SUDO_LOG"
+if [[ "$1" == -n && "${2:-}" == /Library/PrivilegedHelperTools/com.dancumberland.awake-lid ]]; then
+  [[ "${FAKE_HELPER_READY:-0}" == 1 ]] || exit 1
+  case "${3:-}" in
+  status) echo 'awake-lid-helper 1.0.0'; exit 0 ;;
+  start) echo 1 >"$PMSET_STATE_FILE"; exit 0 ;;
+  stop) echo 0 >"$PMSET_STATE_FILE"; exit 0 ;;
+  esac
+  exit 1
+fi
 if [[ "$1" == "-v" || "$1" == "-n" ]]; then
   shift || true
   [[ $# -eq 0 ]] && exit 0
@@ -220,7 +229,7 @@ SH
 @test "--version prints the version and exits 0" {
   run "$AWAKE" --version
   [ "$status" -eq 0 ]
-  [[ "$output" == *"awake 4.0.0"* ]]
+  [[ "$output" == *"awake 4.1.0"* ]]
 }
 
 @test "-h prints help and exits 0" {
@@ -670,4 +679,28 @@ teardown() {
   [ ! -f "$SUDO_LOG" ]
   [ "$(cat "$PMSET_STATE_FILE")" = 1 ]
   [ ! -f "$DEFAULTS_LOG" ]
+}
+
+
+@test "installed helper starts and stops lid mode without authenticating" {
+  export FAKE_HELPER_READY=1 KEEP_CAFFEINATE=1
+  stub_mic absent
+  run "$AWAKE" 1 unlock lid
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"no admin password needed"* ]]
+  grep -q 'awake-lid start 3600 0' "$SUDO_LOG"
+  ! grep -q 'sudo -v' "$SUDO_LOG"
+  run "$AWAKE" off
+  [ "$status" -eq 0 ]
+  [ "$(cat "$PMSET_STATE_FILE")" = 0 ]
+  ! grep -q 'sudo -v' "$SUDO_LOG"
+}
+
+@test "helper duration limit rejects before changing state" {
+  export FAKE_HELPER_READY=1
+  run "$AWAKE" 25 lid
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"limited to 24 hours"* ]]
+  [ "$(cat "$PMSET_STATE_FILE")" = 0 ]
+  ! grep -q 'awake-lid start' "$SUDO_LOG"
 }
